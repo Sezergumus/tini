@@ -182,152 +182,15 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     juce::dsp::AudioBlock<float> block(buffer);
     juce::dsp::ProcessContextReplacing<float> context(block);
 
-    // 3. PRE-FX
-
-    auto raw = [this](const char* id) { return apvts.getRawParameterValue(id)->load(); };
-    auto pedalActive = [&](const char* added, const char* on) { return raw(added) > 0.5f && raw(on) > 0.5f; };
-
-    // Noise gate (first in the chain, so it also shuts up the pedals' hiss)
-    if (pedalActive("GATE_ADDED", "GATE_ON"))
+    // 3. THE CHAIN: pedals and the amp, in the order the user arranged them
+    const auto order = PedalCatalog::unpackOrder(chainOrder.load());
+    for (int item : order)
     {
-        noiseGate.setThreshold(raw("GATE_THRESH"));
-        noiseGate.setRelease(raw("GATE_REL"));
-        noiseGate.process(context);
+        if (item == PedalCatalog::ampItem)
+            processAmp(buffer, context);
+        else
+            processPedal(item, buffer, context);
     }
-
-    // Compressor
-    if (apvts.getRawParameterValue("COMP_ON")->load() > 0.5f)
-    {
-        const auto sustain = apvts.getRawParameterValue("COMP_SUST")->load();
-        const auto attack = apvts.getRawParameterValue("COMP_ATT")->load();
-        const auto blend = apvts.getRawParameterValue("COMP_MIX")->load() / 100.0f;
-        const auto makeup = juce::Decibels::decibelsToGain(apvts.getRawParameterValue("COMP_LVL")->load());
-
-        const int numCh = buffer.getNumChannels();
-        const int numSamples = buffer.getNumSamples();
-
-        // keep a dry copy for parallel compression (no reallocation once prepared)
-        compressorDry.setSize(numCh, numSamples, false, false, true);
-        for (int ch = 0; ch < numCh; ++ch)
-            compressorDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
-
-        compressor.setThreshold(juce::jmap(sustain, 0.0f, 100.0f, 0.0f, -40.0f));
-        compressor.setAttack(attack);
-        compressor.process(context);
-
-        // blend wet/dry, then apply the output level
-        buffer.applyGain(blend);
-        for (int ch = 0; ch < numCh; ++ch)
-            buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - blend);
-        buffer.applyGain(makeup);
-    }
-
-    // Boost
-    if (pedalActive("BOOST_ADDED", "BOOST_ON"))
-    {
-        boost.setGainDecibels(raw("BOOST_GAIN"));
-        boost.process(context);
-    }
-
-    // Overdrive
-    if (apvts.getRawParameterValue("OD_ON")->load() > 0.5f)
-    {
-        auto odGain = apvts.getRawParameterValue("OD_GAIN")->load();
-        auto odLvl = apvts.getRawParameterValue("OD_LVL")->load();
-        overdriveGain.setGainLinear(juce::Decibels::decibelsToGain(odGain * 2.0f));
-        float odOutputMultiplier = juce::jmap(odLvl, 0.0f, 10.0f, 0.0f, 2.0f);
-
-        overdriveGain.process(context);
-        overdrive.process(context);
-        buffer.applyGain(odOutputMultiplier);
-    }
-
-    // 4. AMP CORE
-
-    // Preamp Drive
-	auto currentDrive = apvts.getRawParameterValue("DRIVE")->load();
-	crunchEffect.setDrive(currentDrive);
-    crunchEffect.process(buffer);
-
-    // EQ
-	float lowDb = juce::jmap(apvts.getRawParameterValue("LOW")->load(), 0.0f, 10.0f, -15.0f, 15.0f);
-	float midDb = juce::jmap(apvts.getRawParameterValue("MID")->load(), 0.0f, 10.0f, -15.0f, 15.0f);
-    float highDb = juce::jmap(apvts.getRawParameterValue("HIGH")->load(), 0.0f, 10.0f, -15.0f, 15.0f);
-
-    const auto sr = getSampleRate();
-
-    if (lowDb != lastLowDb)
-    {
-        *eqChain.get<0>().state = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(sr, 250.0f, 0.707f, juce::Decibels::decibelsToGain(lowDb));
-        lastLowDb = lowDb;
-    }
-    if (midDb != lastMidDb)
-    {
-        *eqChain.get<1>().state = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(sr, 1000.0f, 0.707f, juce::Decibels::decibelsToGain(midDb));
-        lastMidDb = midDb;
-    }
-    if (highDb != lastHighDb)
-    {
-        *eqChain.get<2>().state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(sr, 4000.0f, 0.707f, juce::Decibels::decibelsToGain(highDb));
-        lastHighDb = highDb;
-    }
-
-	eqChain.process(context);
-
-    // 5. CAB SIM
-
-	cabSimulator.process(context);
-
-	// Cab low / high cut (coefficients are only rebuilt when the knob moves)
-	{
-		const auto sr = getSampleRate();
-		const float lowHz = apvts.getRawParameterValue("CAB_LOWCUT")->load();
-		const float highHz = juce::jmin(apvts.getRawParameterValue("CAB_HIGHCUT")->load(), (float)(sr * 0.49));
-
-		if (lowHz != lastLowCutHz)
-		{
-			*cabLowCut.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sr, lowHz);
-			lastLowCutHz = lowHz;
-		}
-		if (highHz != lastHighCutHz)
-		{
-			*cabHighCut.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sr, highHz);
-			lastHighCutHz = highHz;
-		}
-
-		cabLowCut.process(context);
-		cabHighCut.process(context);
-	}
-
-	// 6. POST-AMP FX (modulation -> delay -> reverb)
-
-	if (pedalActive("CHORUS_ADDED", "CHORUS_ON"))
-	{
-		chorus.setRate(raw("CHORUS_RATE"));
-		chorus.setDepth(raw("CHORUS_DEPTH") / 100.0f);
-		chorus.setMix(raw("CHORUS_MIX") / 100.0f);
-		chorus.process(context);
-	}
-
-	if (pedalActive("DELAY_ADDED", "DELAY_ON"))
-	{
-		delayFx.setParameters(raw("DELAY_TIME"), raw("DELAY_FB") / 100.0f, raw("DELAY_MIX") / 100.0f);
-		delayFx.process(buffer);
-	}
-
-	if (pedalActive("REVERB_ADDED", "REVERB_ON"))
-	{
-		const float mix = raw("REVERB_MIX") / 100.0f;
-
-		juce::dsp::Reverb::Parameters reverbParams;
-		reverbParams.roomSize = raw("REVERB_SIZE") / 100.0f;
-		reverbParams.damping = raw("REVERB_DAMP") / 100.0f;
-		reverbParams.width = 1.0f;
-		reverbParams.dryLevel = 0.5f;          // juce::Reverb scales dry by 2, so 0.5 = unity
-		reverbParams.wetLevel = mix * 0.33f;   // wet is scaled by 3
-		reverb.setParameters(reverbParams);
-		reverb.process(context);
-	}
 
 	auto currentMaster = apvts.getRawParameterValue("MASTER")->load();
 	float masterGain = currentMaster / 10.0f;
@@ -356,6 +219,179 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 }
 
 //==============================================================================
+void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<float>& buffer,
+                                                juce::dsp::ProcessContextReplacing<float>& context)
+{
+    auto raw = [this](const char* id) { return apvts.getRawParameterValue(id)->load(); };
+    auto pedalActive = [&](const char* added, const char* on) { return raw(added) > 0.5f && raw(on) > 0.5f; };
+
+    switch (item)
+    {
+    case 0: // Noise gate
+        if (pedalActive("GATE_ADDED", "GATE_ON"))
+        {
+            noiseGate.setThreshold(raw("GATE_THRESH"));
+            noiseGate.setRelease(raw("GATE_REL"));
+            noiseGate.process(context);
+        }
+        break;
+
+    case 1: // Compressor
+        if (raw("COMP_ON") > 0.5f)
+        {
+            const auto sustain = raw("COMP_SUST");
+            const auto attack = raw("COMP_ATT");
+            const auto blend = raw("COMP_MIX") / 100.0f;
+            const auto makeup = juce::Decibels::decibelsToGain(raw("COMP_LVL"));
+
+            const int numCh = buffer.getNumChannels();
+            const int numSamples = buffer.getNumSamples();
+
+            // keep a dry copy for parallel compression (no reallocation once prepared)
+            compressorDry.setSize(numCh, numSamples, false, false, true);
+            for (int ch = 0; ch < numCh; ++ch)
+                compressorDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+
+            compressor.setThreshold(juce::jmap(sustain, 0.0f, 100.0f, 0.0f, -40.0f));
+            compressor.setAttack(attack);
+            compressor.process(context);
+
+            // blend wet/dry, then apply the output level
+            buffer.applyGain(blend);
+            for (int ch = 0; ch < numCh; ++ch)
+                buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - blend);
+            buffer.applyGain(makeup);
+        }
+        break;
+
+    case 2: // Boost
+        if (pedalActive("BOOST_ADDED", "BOOST_ON"))
+        {
+            boost.setGainDecibels(raw("BOOST_GAIN"));
+            boost.process(context);
+        }
+        break;
+
+    case 3: // Overdrive
+        if (raw("OD_ON") > 0.5f)
+        {
+            const auto odGain = raw("OD_GAIN");
+            const auto odLvl = raw("OD_LVL");
+            overdriveGain.setGainLinear(juce::Decibels::decibelsToGain(odGain * 2.0f));
+            const float odOutputMultiplier = juce::jmap(odLvl, 0.0f, 10.0f, 0.0f, 2.0f);
+
+            overdriveGain.process(context);
+            overdrive.process(context);
+            buffer.applyGain(odOutputMultiplier);
+        }
+        break;
+
+    case 4: // Chorus
+        if (pedalActive("CHORUS_ADDED", "CHORUS_ON"))
+        {
+            chorus.setRate(raw("CHORUS_RATE"));
+            chorus.setDepth(raw("CHORUS_DEPTH") / 100.0f);
+            chorus.setMix(raw("CHORUS_MIX") / 100.0f);
+            chorus.process(context);
+        }
+        break;
+
+    case 5: // Delay
+        if (pedalActive("DELAY_ADDED", "DELAY_ON"))
+        {
+            delayFx.setParameters(raw("DELAY_TIME"), raw("DELAY_FB") / 100.0f, raw("DELAY_MIX") / 100.0f);
+            delayFx.process(buffer);
+        }
+        break;
+
+    case 6: // Reverb
+        if (pedalActive("REVERB_ADDED", "REVERB_ON"))
+        {
+            const float mix = raw("REVERB_MIX") / 100.0f;
+
+            juce::dsp::Reverb::Parameters reverbParams;
+            reverbParams.roomSize = raw("REVERB_SIZE") / 100.0f;
+            reverbParams.damping = raw("REVERB_DAMP") / 100.0f;
+            reverbParams.width = 1.0f;
+            reverbParams.dryLevel = 0.5f;          // juce::Reverb scales dry by 2, so 0.5 = unity
+            reverbParams.wetLevel = mix * 0.33f;   // wet is scaled by 3
+            reverb.setParameters(reverbParams);
+            reverb.process(context);
+        }
+        break;
+
+    default:
+        jassertfalse;
+        break;
+    }
+}
+
+void NeuralFlowAmpAudioProcessor::processAmp (juce::AudioBuffer<float>& buffer,
+                                              juce::dsp::ProcessContextReplacing<float>& context)
+{
+    // Preamp Drive
+    crunchEffect.setDrive(apvts.getRawParameterValue("DRIVE")->load());
+    crunchEffect.process(buffer);
+
+    // EQ
+    const float lowDb  = juce::jmap(apvts.getRawParameterValue("LOW")->load(),  0.0f, 10.0f, -15.0f, 15.0f);
+    const float midDb  = juce::jmap(apvts.getRawParameterValue("MID")->load(),  0.0f, 10.0f, -15.0f, 15.0f);
+    const float highDb = juce::jmap(apvts.getRawParameterValue("HIGH")->load(), 0.0f, 10.0f, -15.0f, 15.0f);
+
+    const auto sr = getSampleRate();
+
+    if (lowDb != lastLowDb)
+    {
+        *eqChain.get<0>().state = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(sr, 250.0f, 0.707f, juce::Decibels::decibelsToGain(lowDb));
+        lastLowDb = lowDb;
+    }
+    if (midDb != lastMidDb)
+    {
+        *eqChain.get<1>().state = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(sr, 1000.0f, 0.707f, juce::Decibels::decibelsToGain(midDb));
+        lastMidDb = midDb;
+    }
+    if (highDb != lastHighDb)
+    {
+        *eqChain.get<2>().state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(sr, 4000.0f, 0.707f, juce::Decibels::decibelsToGain(highDb));
+        lastHighDb = highDb;
+    }
+
+    eqChain.process(context);
+
+    // Cab sim (IR) and its low / high cut. Coefficients are only rebuilt when the knob moves.
+    cabSimulator.process(context);
+
+    const float lowHz = apvts.getRawParameterValue("CAB_LOWCUT")->load();
+    const float highHz = juce::jmin(apvts.getRawParameterValue("CAB_HIGHCUT")->load(), (float)(sr * 0.49));
+
+    if (lowHz != lastLowCutHz)
+    {
+        *cabLowCut.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sr, lowHz);
+        lastLowCutHz = lowHz;
+    }
+    if (highHz != lastHighCutHz)
+    {
+        *cabHighCut.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sr, highHz);
+        lastHighCutHz = highHz;
+    }
+
+    cabLowCut.process(context);
+    cabHighCut.process(context);
+}
+
+//==============================================================================
+PedalCatalog::ChainOrder NeuralFlowAmpAudioProcessor::getChainOrder() const
+{
+    return PedalCatalog::unpackOrder(chainOrder.load());
+}
+
+void NeuralFlowAmpAudioProcessor::setChainOrder (const PedalCatalog::ChainOrder& order)
+{
+    if (PedalCatalog::isValidOrder(order))
+        chainOrder.store(PedalCatalog::packOrder(order));
+}
+
+//==============================================================================
 bool NeuralFlowAmpAudioProcessor::hasEditor() const
 {
     return true; // (change this to false if you choose to not supply an editor)
@@ -372,6 +408,7 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
     // Parameters plus the path of the loaded IR, stored as XML.
     auto state = apvts.copyState();
     state.setProperty("irPath", loadedIrFile.getFullPathName(), nullptr);
+    state.setProperty("chainOrder", (int) chainOrder.load(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
@@ -386,6 +423,16 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
 
     auto state = juce::ValueTree::fromXml(*xml);
     apvts.replaceState(state);
+
+    // Pedal / amp order (older sessions have none: keep the default)
+    auto order = PedalCatalog::defaultOrder();
+    if (state.hasProperty("chainOrder"))
+    {
+        const auto loaded = PedalCatalog::unpackOrder((juce::uint32)(int) state.getProperty("chainOrder"));
+        if (PedalCatalog::isValidOrder(loaded))
+            order = loaded;
+    }
+    setChainOrder(order);
 
     // The IR itself is not embedded: reload it if the file is still there.
     const juce::File irFile(state.getProperty("irPath").toString());

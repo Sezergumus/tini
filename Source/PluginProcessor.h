@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "Crunch.h"
 #include "DSP/StereoDelay.h"
+#include "PedalCatalog.h"
 
 //==============================================================================
 /**
@@ -59,6 +60,11 @@ public:
 
     void loadImpulseResponse(const juce::File& file);
 
+    /** Order of the pedals and the amp in the signal chain (item numbers, see PedalCatalog).
+        Safe to call from the UI while audio is running. */
+    PedalCatalog::ChainOrder getChainOrder() const;
+    void setChainOrder(const PedalCatalog::ChainOrder& order);
+
     juce::File loadedIrFile; // last IR chosen by the user (message thread only)
 
     juce::dsp::Convolution cabSimulator;
@@ -69,6 +75,11 @@ private:
         if (value > target.load(std::memory_order_relaxed))
             target.store(value, std::memory_order_relaxed);
     }
+
+    void processPedal(int item, juce::AudioBuffer<float>& buffer, juce::dsp::ProcessContextReplacing<float>& context);
+    void processAmp(juce::AudioBuffer<float>& buffer, juce::dsp::ProcessContextReplacing<float>& context);
+
+    std::atomic<juce::uint32> chainOrder { PedalCatalog::packOrder(PedalCatalog::defaultOrder()) };
 
     using CabFilter = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>>;
     CabFilter cabLowCut, cabHighCut;

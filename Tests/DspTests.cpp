@@ -402,6 +402,56 @@ namespace
             check (std::abs (rms (out, 0, from) / rms (ref, 0, from) - 1.0f) < 0.03f, "reverb mix 0 % is transparent");
         }
     }
+
+    //==========================================================================
+    void testChainOrder()
+    {
+        const int from = 20 * blockSize;
+        auto order = PedalCatalog::defaultOrder();
+
+        check (PedalCatalog::isValidOrder (order), "the default chain order is a valid permutation");
+        check (order[4] == PedalCatalog::ampItem, "the amp starts between the pre-amp and post-amp pedals");
+
+        // Same pedals, different order: a boost ahead of the overdrive gets squashed by it, a boost
+        // behind the overdrive is plain gain.
+        auto boostThenOverdrive = [] (auto& p)
+        {
+            setParam (p, "OD_ON", 1.0f);
+            addPedal (p, "BOOST");
+            setParam (p, "BOOST_GAIN", 24.0f);
+        };
+
+        const auto before = sineThrough (0.05f, boostThenOverdrive);
+
+        auto swapped = order;
+        std::swap (swapped[2], swapped[3]);   // boost <-> overdrive
+        const auto after = sineThrough (0.05f, [&] (auto& p) { boostThenOverdrive (p); p.setChainOrder (swapped); });
+
+        const float ratio = rms (after, 0, from) / rms (before, 0, from);
+        check (ratio > 1.1f, "moving the boost behind the overdrive changes the sound (level x" + juce::String (ratio, 2) + ")");
+
+        // Garbage orders are rejected and leave the chain as it was.
+        {
+            Prepared p;
+            auto bad = order;
+            bad[0] = bad[1];
+            p.proc.setChainOrder (bad);
+            check (p.proc.getChainOrder() == order, "an invalid chain order is ignored");
+        }
+
+        // The order is part of the saved state.
+        {
+            juce::MemoryBlock saved;
+            {
+                Prepared a;
+                a.proc.setChainOrder (swapped);
+                a.proc.getStateInformation (saved);
+            }
+            Prepared b;
+            b.proc.setStateInformation (saved.getData(), (int) saved.getSize());
+            check (b.proc.getChainOrder() == swapped, "state restores the chain order");
+        }
+    }
 }
 
 void renderUiSnapshots (const juce::File& dir);   // Tests/UiSnapshots.cpp
@@ -421,6 +471,7 @@ int main (int argc, char** argv)
     testEqProcessesBothChannels();
     testCompressor();
     testAddOnPedals();
+    testChainOrder();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;
