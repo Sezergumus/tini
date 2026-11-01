@@ -84,6 +84,7 @@ private:
 	float lastLowDb = 1000.0f, lastMidDb = 1000.0f, lastHighDb = 1000.0f;
 
     juce::dsp::Compressor<float> compressor;
+    juce::AudioBuffer<float> compressorDry; // untouched copy for the blend knob
     juce::dsp::WaveShaper<float> overdrive;
     juce::dsp::Gain<float> overdriveGain;
     

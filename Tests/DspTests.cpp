@@ -205,6 +205,49 @@ namespace
         check (left > 0.0f && std::abs (left - right) / left < 0.05f,
                "EQ treats both channels equally (L rms " + juce::String (left, 4) + ", R rms " + juce::String (right, 4) + ")");
     }
+    void testCompressor()
+    {
+        auto sine = [] (int block, juce::AudioBuffer<float>& buf)
+        {
+            for (int i = 0; i < buf.getNumSamples(); ++i)
+            {
+                const float v = 0.3f * std::sin (juce::MathConstants<float>::twoPi * 220.0f
+                                                 * (float) (block * blockSize + i) / (float) sampleRate);
+                buf.setSample (0, i, v);
+                buf.setSample (1, i, v);
+            }
+        };
+
+        auto level = [&] (bool on, float sustain, float mix, float levelDb)
+        {
+            Prepared prepared;
+            auto& p = prepared.proc;
+            makeTransparent (p);
+            setParam (p, "COMP_ON", on ? 1.0f : 0.0f);
+            setParam (p, "COMP_SUST", sustain);
+            setParam (p, "COMP_ATT", 1.0f);
+            setParam (p, "COMP_MIX", mix);
+            setParam (p, "COMP_LVL", levelDb);
+            return rms (run (p, 40, sine), 0, 20 * blockSize);
+        };
+
+        const float bypassed = level (false, 100.0f, 100.0f, 0.0f);
+        const float squashed = level (true, 100.0f, 100.0f, 0.0f);
+        check (squashed < bypassed * 0.5f,
+               "compressor reduces level of a loud signal (" + juce::String (bypassed, 4) + " -> " + juce::String (squashed, 4) + ")");
+
+        const float boosted = level (true, 100.0f, 100.0f, 12.0f);
+        check (std::abs (boosted / squashed - 3.98f) < 0.4f,
+               "COMP_LVL +12 dB raises output ~4x (ratio " + juce::String (boosted / squashed, 2) + ")");
+
+        const float dryBlend = level (true, 100.0f, 0.0f, 0.0f);
+        check (std::abs (dryBlend / bypassed - 1.0f) < 0.02f,
+               "COMP_MIX 0 % leaves the dry signal untouched (ratio " + juce::String (dryBlend / bypassed, 3) + ")");
+
+        const float halfBlend = level (true, 100.0f, 50.0f, 0.0f);
+        check (halfBlend > squashed * 1.1f && halfBlend < bypassed * 0.95f,
+               "COMP_MIX 50 % lies between compressed and dry");
+    }
 }
 
 int main()
@@ -214,6 +257,7 @@ int main()
     testIrIsApplied();
     testStateRoundTrip();
     testEqProcessesBothChannels();
+    testCompressor();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

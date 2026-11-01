@@ -110,6 +110,9 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 	lastLowCutHz = lastHighCutHz = -1.0f; // force coefficient refresh
 
 	compressor.prepare(spec);
+	compressor.setRatio(4.0f);
+	compressor.setRelease(120.0f);
+	compressorDry.setSize((int)spec.numChannels, samplesPerBlock);
 	overdrive.prepare(spec);
 	overdriveGain.prepare(spec);
 
@@ -170,11 +173,28 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // Compressor
     if (apvts.getRawParameterValue("COMP_ON")->load() > 0.5f)
     {
-        auto compSust = apvts.getRawParameterValue("COMP_SUST")->load();
-        auto compAtt = apvts.getRawParameterValue("COMP_ATT")->load();
-        compressor.setThreshold(juce::jmap(compSust, 0.0f, 100.0f, 0.0f, -40.0f));
-        compressor.setAttack(compAtt);
+        const auto sustain = apvts.getRawParameterValue("COMP_SUST")->load();
+        const auto attack = apvts.getRawParameterValue("COMP_ATT")->load();
+        const auto blend = apvts.getRawParameterValue("COMP_MIX")->load() / 100.0f;
+        const auto makeup = juce::Decibels::decibelsToGain(apvts.getRawParameterValue("COMP_LVL")->load());
+
+        const int numCh = buffer.getNumChannels();
+        const int numSamples = buffer.getNumSamples();
+
+        // keep a dry copy for parallel compression (no reallocation once prepared)
+        compressorDry.setSize(numCh, numSamples, false, false, true);
+        for (int ch = 0; ch < numCh; ++ch)
+            compressorDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+
+        compressor.setThreshold(juce::jmap(sustain, 0.0f, 100.0f, 0.0f, -40.0f));
+        compressor.setAttack(attack);
         compressor.process(context);
+
+        // blend wet/dry, then apply the output level
+        buffer.applyGain(blend);
+        for (int ch = 0; ch < numCh; ++ch)
+            buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - blend);
+        buffer.applyGain(makeup);
     }
 
     // Overdrive
