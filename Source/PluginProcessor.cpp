@@ -104,6 +104,9 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 	eqChain.prepare(spec);
 
 	cabSimulator.prepare(spec);
+	cabLowCut.prepare(spec);
+	cabHighCut.prepare(spec);
+	lastLowCutHz = lastHighCutHz = -1.0f; // force coefficient refresh
 
 	compressor.prepare(spec);
 	overdrive.prepare(spec);
@@ -155,6 +158,8 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+	storePeakMax(inputPeak, buffer.getMagnitude(0, buffer.getNumSamples()));
+
 	// 2. JUCE DSP AUDIO BLOCK
     juce::dsp::AudioBlock<float> block(buffer);
     juce::dsp::ProcessContextReplacing<float> context(block);
@@ -162,21 +167,27 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     // 3. PRE-FX
 
     // Compressor
-    auto compSust = apvts.getRawParameterValue("COMP_SUST")->load();
-    auto compAtt = apvts.getRawParameterValue("COMP_ATT")->load();
-    compressor.setThreshold(juce::jmap(compSust, 0.0f, 100.0f, 0.0f, -40.0f));
-    compressor.setAttack(compAtt);
-    compressor.process(context);
+    if (apvts.getRawParameterValue("COMP_ON")->load() > 0.5f)
+    {
+        auto compSust = apvts.getRawParameterValue("COMP_SUST")->load();
+        auto compAtt = apvts.getRawParameterValue("COMP_ATT")->load();
+        compressor.setThreshold(juce::jmap(compSust, 0.0f, 100.0f, 0.0f, -40.0f));
+        compressor.setAttack(compAtt);
+        compressor.process(context);
+    }
 
     // Overdrive
-    auto odGain = apvts.getRawParameterValue("OD_GAIN")->load();
-    auto odLvl = apvts.getRawParameterValue("OD_LVL")->load();
-    overdriveGain.setGainLinear(juce::Decibels::decibelsToGain(odGain * 2.0f));
-    float odOutputMultiplier = juce::jmap(odLvl, 0.0f, 10.0f, 0.0f, 2.0f);
+    if (apvts.getRawParameterValue("OD_ON")->load() > 0.5f)
+    {
+        auto odGain = apvts.getRawParameterValue("OD_GAIN")->load();
+        auto odLvl = apvts.getRawParameterValue("OD_LVL")->load();
+        overdriveGain.setGainLinear(juce::Decibels::decibelsToGain(odGain * 2.0f));
+        float odOutputMultiplier = juce::jmap(odLvl, 0.0f, 10.0f, 0.0f, 2.0f);
 
-    overdriveGain.process(context);
-    overdrive.process(context);
-    buffer.applyGain(odOutputMultiplier);
+        overdriveGain.process(context);
+        overdrive.process(context);
+        buffer.applyGain(odOutputMultiplier);
+    }
 
     // 4. AMP CORE
 
@@ -200,9 +211,32 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
 	cabSimulator.process(context);
 
+	// Cab low / high cut (coefficients are only rebuilt when the knob moves)
+	{
+		const auto sr = getSampleRate();
+		const float lowHz = apvts.getRawParameterValue("CAB_LOWCUT")->load();
+		const float highHz = juce::jmin(apvts.getRawParameterValue("CAB_HIGHCUT")->load(), (float)(sr * 0.49));
+
+		if (lowHz != lastLowCutHz)
+		{
+			*cabLowCut.state = *juce::dsp::IIR::Coefficients<float>::makeHighPass(sr, lowHz);
+			lastLowCutHz = lowHz;
+		}
+		if (highHz != lastHighCutHz)
+		{
+			*cabHighCut.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass(sr, highHz);
+			lastHighCutHz = highHz;
+		}
+
+		cabLowCut.process(context);
+		cabHighCut.process(context);
+	}
+
 	auto currentMaster = apvts.getRawParameterValue("MASTER")->load();
 	float masterGain = currentMaster / 10.0f;
 	buffer.applyGain(masterGain);
+
+	storePeakMax(outputPeak, buffer.getMagnitude(0, buffer.getNumSamples()));
 
     // 6. OSCILLOSCOPE
     auto* channelData = buffer.getReadPointer(0);
@@ -269,7 +303,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_SUST", "Sustain", 0.0f, 100.0f, 50.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_ATT", "Attack", 0.0f, 100.0f, 10.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_MIX", "Blend", 0.0f, 100.0f, 100.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_LVL", "Level", -12.0f, 12.0f, 50.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_LVL", "Level", -12.0f, 12.0f, 0.0f));
 
 
     // Overdrive
@@ -277,11 +311,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     params.push_back(std::make_unique<juce::AudioParameterFloat>("OD_TONE", "Tone", 0.0f, 10.0f, 5.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("OD_LVL", "Level", 0.0f, 10.0f, 5.0f));
 
+    // Pedal bypass switches (true = pedal active)
+    params.push_back(std::make_unique<juce::AudioParameterBool>("COMP_ON", "Compressor On", true));
+    params.push_back(std::make_unique<juce::AudioParameterBool>("OD_ON", "Overdrive On", true));
+
+    // Cab filters (defaults are fully open, i.e. transparent)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("CAB_LOWCUT", "Cab Low Cut",
+        juce::NormalisableRange<float>(20.0f, 300.0f, 1.0f, 0.5f), 20.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("CAB_HIGHCUT", "Cab High Cut",
+        juce::NormalisableRange<float>(4000.0f, 20000.0f, 10.0f, 0.5f), 20000.0f));
+
     return { params.begin(), params.end() };
 }
 
 void NeuralFlowAmpAudioProcessor::loadImpulseResponse(const juce::File& file) {
 	if (file.existsAsFile()) {
 		cabSimulator.loadImpulseResponse(file, juce::dsp::Convolution::Stereo::yes, juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
+		loadedIrFile = file;
 	}
 }

@@ -52,11 +52,27 @@ public:
     std::array<float, scopeSize> scopeData;
     std::atomic<bool> isNextFrameReady{ false };
 
+    // Block peaks (linear gain) for the UI meters. The UI reads them with exchange(0).
+    std::atomic<float> inputPeak{ 0.0f };
+    std::atomic<float> outputPeak{ 0.0f };
+
     void loadImpulseResponse(const juce::File& file);
+
+    juce::File loadedIrFile; // last IR chosen by the user (message thread only)
 
     juce::dsp::Convolution cabSimulator;
     juce::AudioFormatManager formatManager;
 private:
+    static void storePeakMax(std::atomic<float>& target, float value)
+    {
+        if (value > target.load(std::memory_order_relaxed))
+            target.store(value, std::memory_order_relaxed);
+    }
+
+    using CabFilter = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>>;
+    CabFilter cabLowCut, cabHighCut;
+    float lastLowCutHz = -1.0f, lastHighCutHz = -1.0f;
+
     //==============================================================================    
 	juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
