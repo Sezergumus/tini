@@ -116,6 +116,20 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 	overdrive.prepare(spec);
 	overdriveGain.prepare(spec);
 
+	noiseGate.prepare(spec);
+	noiseGate.setRatio(10.0f);
+	noiseGate.setAttack(1.0f);
+
+	boost.prepare(spec);
+	boost.setRampDurationSeconds(0.02);
+
+	chorus.prepare(spec);
+	chorus.setCentreDelay(7.0f);
+	chorus.setFeedback(0.0f);
+
+	delayFx.prepare(spec);
+	reverb.prepare(spec);
+
 	// Tube overdrive using tanh function
 	overdrive.functionToUse = [](float x) { return std::tanh(x); };
 }
@@ -170,6 +184,17 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     // 3. PRE-FX
 
+    auto raw = [this](const char* id) { return apvts.getRawParameterValue(id)->load(); };
+    auto pedalActive = [&](const char* added, const char* on) { return raw(added) > 0.5f && raw(on) > 0.5f; };
+
+    // Noise gate (first in the chain, so it also shuts up the pedals' hiss)
+    if (pedalActive("GATE_ADDED", "GATE_ON"))
+    {
+        noiseGate.setThreshold(raw("GATE_THRESH"));
+        noiseGate.setRelease(raw("GATE_REL"));
+        noiseGate.process(context);
+    }
+
     // Compressor
     if (apvts.getRawParameterValue("COMP_ON")->load() > 0.5f)
     {
@@ -195,6 +220,13 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         for (int ch = 0; ch < numCh; ++ch)
             buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - blend);
         buffer.applyGain(makeup);
+    }
+
+    // Boost
+    if (pedalActive("BOOST_ADDED", "BOOST_ON"))
+    {
+        boost.setGainDecibels(raw("BOOST_GAIN"));
+        boost.process(context);
     }
 
     // Overdrive
@@ -267,13 +299,43 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 		cabHighCut.process(context);
 	}
 
+	// 6. POST-AMP FX (modulation -> delay -> reverb)
+
+	if (pedalActive("CHORUS_ADDED", "CHORUS_ON"))
+	{
+		chorus.setRate(raw("CHORUS_RATE"));
+		chorus.setDepth(raw("CHORUS_DEPTH") / 100.0f);
+		chorus.setMix(raw("CHORUS_MIX") / 100.0f);
+		chorus.process(context);
+	}
+
+	if (pedalActive("DELAY_ADDED", "DELAY_ON"))
+	{
+		delayFx.setParameters(raw("DELAY_TIME"), raw("DELAY_FB") / 100.0f, raw("DELAY_MIX") / 100.0f);
+		delayFx.process(buffer);
+	}
+
+	if (pedalActive("REVERB_ADDED", "REVERB_ON"))
+	{
+		const float mix = raw("REVERB_MIX") / 100.0f;
+
+		juce::dsp::Reverb::Parameters reverbParams;
+		reverbParams.roomSize = raw("REVERB_SIZE") / 100.0f;
+		reverbParams.damping = raw("REVERB_DAMP") / 100.0f;
+		reverbParams.width = 1.0f;
+		reverbParams.dryLevel = 0.5f;          // juce::Reverb scales dry by 2, so 0.5 = unity
+		reverbParams.wetLevel = mix * 0.33f;   // wet is scaled by 3
+		reverb.setParameters(reverbParams);
+		reverb.process(context);
+	}
+
 	auto currentMaster = apvts.getRawParameterValue("MASTER")->load();
 	float masterGain = currentMaster / 10.0f;
 	buffer.applyGain(masterGain);
 
 	storePeakMax(outputPeak, buffer.getMagnitude(0, buffer.getNumSamples()));
 
-    // 6. OSCILLOSCOPE
+    // 7. OSCILLOSCOPE
     auto* channelData = buffer.getReadPointer(0);
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
@@ -362,6 +424,42 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     // Pedal bypass switches (true = pedal active)
     params.push_back(std::make_unique<juce::AudioParameterBool>("COMP_ON", "Compressor On", true));
     params.push_back(std::make_unique<juce::AudioParameterBool>("OD_ON", "Overdrive On", true));
+
+    // Add-on pedals. *_ADDED says whether the pedal is in the chain (set from the UI).
+    auto addPedalSwitches = [&params](const juce::String& id, const juce::String& name)
+    {
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            juce::ParameterID(id + "_ADDED", 1), name + " In Chain", false,
+            juce::AudioParameterBoolAttributes().withAutomatable(false)));
+        params.push_back(std::make_unique<juce::AudioParameterBool>(id + "_ON", name + " On", true));
+    };
+    auto addFloat = [&params](const juce::String& id, const juce::String& name, float lo, float hi, float def, float skew = 1.0f)
+    {
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(id, name,
+            juce::NormalisableRange<float>(lo, hi, 0.0f, skew), def));
+    };
+
+    addPedalSwitches("GATE", "Gate");
+    addFloat("GATE_THRESH", "Gate Threshold", -80.0f, -20.0f, -55.0f);
+    addFloat("GATE_REL", "Gate Release", 10.0f, 500.0f, 120.0f, 0.5f);
+
+    addPedalSwitches("BOOST", "Boost");
+    addFloat("BOOST_GAIN", "Boost Gain", 0.0f, 24.0f, 6.0f);
+
+    addPedalSwitches("CHORUS", "Chorus");
+    addFloat("CHORUS_RATE", "Chorus Rate", 0.1f, 8.0f, 1.2f, 0.5f);
+    addFloat("CHORUS_DEPTH", "Chorus Depth", 0.0f, 100.0f, 40.0f);
+    addFloat("CHORUS_MIX", "Chorus Mix", 0.0f, 100.0f, 50.0f);
+
+    addPedalSwitches("DELAY", "Delay");
+    addFloat("DELAY_TIME", "Delay Time", 40.0f, 1000.0f, 380.0f, 0.6f);
+    addFloat("DELAY_FB", "Delay Feedback", 0.0f, 90.0f, 35.0f);
+    addFloat("DELAY_MIX", "Delay Mix", 0.0f, 100.0f, 30.0f);
+
+    addPedalSwitches("REVERB", "Reverb");
+    addFloat("REVERB_SIZE", "Reverb Size", 0.0f, 100.0f, 50.0f);
+    addFloat("REVERB_DAMP", "Reverb Damping", 0.0f, 100.0f, 50.0f);
+    addFloat("REVERB_MIX", "Reverb Mix", 0.0f, 100.0f, 25.0f);
 
     // Cab filters (defaults are fully open, i.e. transparent)
     params.push_back(std::make_unique<juce::AudioParameterFloat>("CAB_LOWCUT", "Cab Low Cut",

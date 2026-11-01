@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "Crunch.h"
+#include "DSP/StereoDelay.h"
 
 //==============================================================================
 /**
@@ -87,6 +88,13 @@ private:
     juce::AudioBuffer<float> compressorDry; // untouched copy for the blend knob
     juce::dsp::WaveShaper<float> overdrive;
     juce::dsp::Gain<float> overdriveGain;
+
+    // Add-on pedals (only processed while their *_ADDED and *_ON parameters are true)
+    juce::dsp::NoiseGate<float> noiseGate;
+    juce::dsp::Gain<float> boost;
+    juce::dsp::Chorus<float> chorus;
+    StereoDelay delayFx;
+    juce::dsp::Reverb reverb;
     
     int scopeDataIndex = 0;
 

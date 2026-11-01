@@ -248,6 +248,160 @@ namespace
         check (halfBlend > squashed * 1.1f && halfBlend < bypassed * 0.95f,
                "COMP_MIX 50 % lies between compressed and dry");
     }
+
+    //==========================================================================
+    auto sineInput (float amplitude, float hz = 220.0f)
+    {
+        return [=] (int block, juce::AudioBuffer<float>& buf)
+        {
+            for (int i = 0; i < buf.getNumSamples(); ++i)
+            {
+                const float v = amplitude * std::sin (juce::MathConstants<float>::twoPi * hz
+                                                      * (float) (block * blockSize + i) / (float) sampleRate);
+                buf.setSample (0, i, v);
+                buf.setSample (1, i, v);
+            }
+        };
+    }
+
+    /** Output of the whole chain for a sine, after `setup` configured the processor. */
+    template <typename Setup>
+    juce::AudioBuffer<float> sineThrough (float amplitude, Setup setup, int numBlocks = 40)
+    {
+        Prepared prepared;
+        makeTransparent (prepared.proc);
+        setup (prepared.proc);
+        return run (prepared.proc, numBlocks, sineInput (amplitude));
+    }
+
+    float differenceRms (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int from)
+    {
+        juce::AudioBuffer<float> d (1, a.getNumSamples());
+        for (int i = 0; i < a.getNumSamples(); ++i)
+            d.setSample (0, i, a.getSample (0, i) - b.getSample (0, i));
+        return rms (d, 0, from);
+    }
+
+    void addPedal (NeuralFlowAmpAudioProcessor& p, const juce::String& id, bool on = true)
+    {
+        setParam (p, id + "_ADDED", 1.0f);
+        setParam (p, id + "_ON", on ? 1.0f : 0.0f);
+    }
+
+    void testAddOnPedals()
+    {
+        const int from = 20 * blockSize;
+        const auto ref = sineThrough (0.05f, [] (auto&) {});
+
+        // A pedal that is switched on but was never added to the chain must do nothing.
+        {
+            const auto out = sineThrough (0.05f, [] (auto& p)
+            {
+                setParam (p, "DELAY_ON", 1.0f);  setParam (p, "DELAY_MIX", 100.0f);
+                setParam (p, "CHORUS_ON", 1.0f); setParam (p, "CHORUS_MIX", 100.0f);
+                setParam (p, "REVERB_ON", 1.0f); setParam (p, "REVERB_MIX", 100.0f);
+                setParam (p, "BOOST_ON", 1.0f);  setParam (p, "GATE_ON", 1.0f);
+            });
+            check (differenceRms (out, ref, from) < 1.0e-6f, "pedals that are not in the chain are ignored");
+        }
+
+        // An added pedal that is bypassed must do nothing either.
+        {
+            const auto out = sineThrough (0.05f, [] (auto& p)
+            {
+                setParam (p, "BOOST_GAIN", 24.0f);
+                addPedal (p, "BOOST", false);
+                setParam (p, "CHORUS_MIX", 100.0f);
+                addPedal (p, "CHORUS", false);
+            });
+            check (differenceRms (out, ref, from) < 1.0e-6f, "bypassed pedals are ignored");
+        }
+
+        // Boost
+        {
+            const auto quiet = rms (sineThrough (0.01f, [] (auto&) {}), 0, from);
+            const auto loud = rms (sineThrough (0.01f, [] (auto& p) { setParam (p, "BOOST_GAIN", 12.0f); addPedal (p, "BOOST"); }), 0, from);
+            check (std::abs (loud / quiet - 3.98f) < 0.4f, "boost +12 dB raises level ~4x (ratio " + juce::String (loud / quiet, 2) + ")");
+        }
+
+        // Noise gate: mutes a signal far below the threshold, lets a loud one through.
+        {
+            auto gated = [] (auto& p) { setParam (p, "GATE_THRESH", -40.0f); addPedal (p, "GATE"); };
+
+            const auto hissOff = rms (sineThrough (0.0005f, [] (auto&) {}), 0, from);
+            const auto hissOn = rms (sineThrough (0.0005f, gated), 0, from);
+            check (hissOn < hissOff * 0.2f, "gate mutes a signal below the threshold (" + juce::String (hissOff, 6) + " -> " + juce::String (hissOn, 6) + ")");
+
+            const auto loudOff = rms (sineThrough (0.2f, [] (auto&) {}), 0, from);
+            const auto loudOn = rms (sineThrough (0.2f, gated), 0, from);
+            check (std::abs (loudOn / loudOff - 1.0f) < 0.1f, "gate passes a signal above the threshold (ratio " + juce::String (loudOn / loudOff, 3) + ")");
+        }
+
+        // Chorus changes the waveform
+        {
+            const auto out = sineThrough (0.05f, [] (auto& p) { setParam (p, "CHORUS_MIX", 100.0f); addPedal (p, "CHORUS"); });
+            check (differenceRms (out, ref, from) > 0.2f * rms (ref, 0, from), "chorus modulates the signal");
+        }
+
+        // Delay: an echo of the right size at the right time
+        {
+            Prepared prepared;
+            auto& p = prepared.proc;
+            makeTransparent (p);
+            setParam (p, "DELAY_TIME", 100.0f);
+            setParam (p, "DELAY_FB", 0.0f);
+            setParam (p, "DELAY_MIX", 50.0f);
+            addPedal (p, "DELAY");
+
+            run (p, 12, [] (int, juce::AudioBuffer<float>&) {});   // let the time smoothing settle
+
+            const auto out = run (p, 20, [] (int block, juce::AudioBuffer<float>& buf)
+            {
+                if (block == 1)
+                    for (int ch = 0; ch < 2; ++ch)
+                        buf.setSample (ch, 10, 0.05f);
+            });
+
+            const int at = blockSize + 10, echoAt = at + 4800;
+            float echo = 0.0f;
+            for (int i = echoAt - 3; i <= echoAt + 3; ++i)
+                echo = juce::jmax (echo, std::abs (out.getSample (0, i)));
+
+            const float ratio = echo / std::abs (out.getSample (0, at));
+            check (std::abs (ratio - 0.5f) < 0.1f, "delay: echo arrives after 100 ms at the mix level (ratio " + juce::String (ratio, 2) + ")");
+        }
+
+        // Reverb leaves a tail; with the mix at 0 it is transparent
+        {
+            auto tailEnergy = [&] (float mix)
+            {
+                Prepared prepared;
+                auto& p = prepared.proc;
+                makeTransparent (p);
+                setParam (p, "REVERB_SIZE", 80.0f);
+                setParam (p, "REVERB_MIX", mix);
+                addPedal (p, "REVERB");
+
+                const auto out = run (p, 20, [] (int block, juce::AudioBuffer<float>& buf)
+                {
+                    if (block == 1)
+                        for (int ch = 0; ch < 2; ++ch)
+                            buf.setSample (ch, 10, 0.05f);
+                });
+
+                double sum = 0.0;
+                for (int i = 4000; i < out.getNumSamples(); ++i)
+                    sum += std::abs (out.getSample (0, i));
+                return (float) sum;
+            };
+
+            const float dry = tailEnergy (0.0f), wet = tailEnergy (100.0f);
+            check (wet > 50.0f * juce::jmax (dry, 1.0e-6f), "reverb leaves a tail (" + juce::String (dry, 5) + " -> " + juce::String (wet, 3) + ")");
+
+            const auto out = sineThrough (0.05f, [] (auto& p) { setParam (p, "REVERB_MIX", 0.0f); addPedal (p, "REVERB"); });
+            check (std::abs (rms (out, 0, from) / rms (ref, 0, from) - 1.0f) < 0.03f, "reverb mix 0 % is transparent");
+        }
+    }
 }
 
 int main()
@@ -258,6 +412,7 @@ int main()
     testStateRoundTrip();
     testEqProcessesBothChannels();
     testCompressor();
+    testAddOnPedals();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;
