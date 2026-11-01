@@ -404,9 +404,17 @@ namespace
     }
 }
 
-int main()
+void renderUiSnapshots (const juce::File& dir);   // Tests/UiSnapshots.cpp
+
+int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+
+    if (argc >= 3 && juce::String (argv[1]) == "--snapshots")
+    {
+        renderUiSnapshots (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+        return 0;
+    }
 
     testIrIsApplied();
     testStateRoundTrip();

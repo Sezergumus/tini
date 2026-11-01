@@ -54,11 +54,12 @@ target_compile_definitions(NeuralFlowAmp PUBLIC JUCE_VST3_CAN_REPLACE_VST2=0)
 # Headless DSP tests (run: build/NeuralFlowAmpTests_artefacts/Release/NeuralFlowAmp Tests.exe)
 juce_add_console_app(NeuralFlowAmpTests PRODUCT_NAME "NeuralFlowAmp Tests")
 
-target_sources(NeuralFlowAmpTests PRIVATE Tests/DspTests.cpp)
+target_sources(NeuralFlowAmpTests PRIVATE Tests/DspTests.cpp Tests/UiSnapshots.cpp)
 
 target_compile_definitions(NeuralFlowAmpTests PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_MODAL_LOOPS_PERMITTED=1
 )
 
 target_link_libraries(NeuralFlowAmpTests PRIVATE
