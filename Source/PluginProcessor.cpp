@@ -272,15 +272,28 @@ juce::AudioProcessorEditor* NeuralFlowAmpAudioProcessor::createEditor()
 //==============================================================================
 void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    // Parameters plus the path of the loaded IR, stored as XML.
+    auto state = apvts.copyState();
+    state.setProperty("irPath", loadedIrFile.getFullPathName(), nullptr);
+
+    if (auto xml = state.createXml())
+        copyXmlToBinary(*xml, destData);
 }
 
 void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    auto xml = getXmlFromBinary(data, sizeInBytes);
+
+    if (xml == nullptr || ! xml->hasTagName(apvts.state.getType()))
+        return;
+
+    auto state = juce::ValueTree::fromXml(*xml);
+    apvts.replaceState(state);
+
+    // The IR itself is not embedded: reload it if the file is still there.
+    const juce::File irFile(state.getProperty("irPath").toString());
+    if (irFile.existsAsFile())
+        loadImpulseResponse(irFile);
 }
 
 //==============================================================================

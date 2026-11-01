@@ -74,25 +74,42 @@ namespace
         setParam (p, "MASTER", 10.0f);
     }
 
+    /** IR = direct spike + an echo (half amplitude) `delay` samples later. A leading gap would be
+        removed by Trim::yes, so the delay has to sit between two non-silent samples. */
+    juce::File writeEchoIr (int delay)
+    {
+        auto irFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("nfa_test_ir.wav");
+        irFile.deleteFile();
+
+        juce::WavAudioFormat wav;
+        juce::AudioBuffer<float> ir (1, 256);
+        ir.clear();
+        ir.setSample (0, 0, 1.0f);
+        ir.setSample (0, delay, 0.5f);
+
+        std::unique_ptr<juce::AudioFormatWriter> writer (
+            wav.createWriterFor (new juce::FileOutputStream (irFile), sampleRate, 1, 24, {}, 0));
+        writer->writeFromAudioSampleBuffer (ir, 0, ir.getNumSamples());
+        return irFile;
+    }
+
+    /** juce::dsp::Convolution starts with a 1-sample unity IR, so "loaded" means size > 1. */
+    bool waitForIr (NeuralFlowAmpAudioProcessor& p)
+    {
+        for (int i = 0; i < 200 && p.cabSimulator.getCurrentIRSize() <= 1; ++i)
+        {
+            run (p, 1, [] (int, juce::AudioBuffer<float>&) {});
+            juce::Thread::sleep (10);
+        }
+        run (p, 8, [] (int, juce::AudioBuffer<float>&) {});   // finish the engine cross-fade
+        return p.cabSimulator.getCurrentIRSize() > 1;
+    }
+
     //==========================================================================
     void testIrIsApplied()
     {
-        // IR = direct spike + an echo (half amplitude) 100 samples later. A leading gap would be
-        // removed by Trim::yes, so the delay has to sit between two non-silent samples.
         const int delay = 100;
-        auto irFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("nfa_test_ir.wav");
-        irFile.deleteFile();
-        {
-            juce::WavAudioFormat wav;
-            juce::AudioBuffer<float> ir (1, 256);
-            ir.clear();
-            ir.setSample (0, 0, 1.0f);
-            ir.setSample (0, delay, 0.5f);
-
-            std::unique_ptr<juce::AudioFormatWriter> writer (
-                wav.createWriterFor (new juce::FileOutputStream (irFile), sampleRate, 1, 24, {}, 0));
-            writer->writeFromAudioSampleBuffer (ir, 0, ir.getNumSamples());
-        }
+        auto irFile = writeEchoIr (delay);
 
         auto impulse = [] (int block, juce::AudioBuffer<float>& buf)
         {
@@ -117,19 +134,42 @@ namespace
 
         p.loadImpulseResponse (irFile);
 
-        // let the background loader finish and the engine swap in
-        for (int i = 0; i < 200 && p.cabSimulator.getCurrentIRSize() <= 1; ++i)
-        {
-            run (p, 1, [] (int, juce::AudioBuffer<float>&) {});
-            juce::Thread::sleep (10);
-        }
-        check (p.cabSimulator.getCurrentIRSize() > 1, "IR loaded into convolution engine");
-        run (p, 8, [] (int, juce::AudioBuffer<float>&) {});   // finish the engine cross-fade
+        check (waitForIr (p), "IR loaded into convolution engine");
 
         const auto wet = run (p, 6, impulse);
         check (std::abs (echoRatio (wet) - 0.5f) < 0.15f,
                "IR applied: echo at +" + juce::String (delay) + " samples is ~0.5 of the direct hit (ratio "
                + juce::String (echoRatio (wet), 2) + ")");
+
+        irFile.deleteFile();
+    }
+    void testStateRoundTrip()
+    {
+        const int delay = 100;
+        auto irFile = writeEchoIr (delay);
+
+        juce::MemoryBlock saved;
+        {
+            Prepared a;
+            setParam (a.proc, "DRIVE", 77.0f);
+            setParam (a.proc, "LOW", 2.0f);
+            setParam (a.proc, "COMP_ON", 0.0f);
+            setParam (a.proc, "CAB_HIGHCUT", 8000.0f);
+            a.proc.loadImpulseResponse (irFile);
+            a.proc.getStateInformation (saved);
+        }
+        check (saved.getSize() > 0, "getStateInformation writes data");
+
+        Prepared b;
+        b.proc.setStateInformation (saved.getData(), (int) saved.getSize());
+
+        auto get = [&] (const char* id) { return b.proc.apvts.getRawParameterValue (id)->load(); };
+        check (std::abs (get ("DRIVE") - 77.0f) < 0.01f, "state restores DRIVE");
+        check (std::abs (get ("LOW") - 2.0f) < 0.01f, "state restores LOW");
+        check (get ("COMP_ON") < 0.5f, "state restores the compressor bypass");
+        check (std::abs (get ("CAB_HIGHCUT") - 8000.0f) < 1.0f, "state restores CAB_HIGHCUT");
+        check (b.proc.loadedIrFile == irFile, "state remembers the IR file");
+        check (waitForIr (b.proc), "state reloads the IR into the convolution engine");
 
         irFile.deleteFile();
     }
@@ -140,6 +180,7 @@ int main()
     juce::ScopedJuceInitialiser_GUI juceInit;
 
     testIrIsApplied();
+    testStateRoundTrip();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;
