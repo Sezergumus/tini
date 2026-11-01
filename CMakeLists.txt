@@ -29,6 +29,11 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/PluginEditor.h
     Source/Crunch.cpp
     Source/Crunch.h
+    Source/UI/Theme.h
+    Source/UI/NeuralLookAndFeel.h
+    Source/UI/Widgets.h
+    Source/UI/Panels.h
+    Source/UI/MainView.h
 )
 
 # Required JUCE modules
