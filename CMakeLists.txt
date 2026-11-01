@@ -29,6 +29,8 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/PluginEditor.h
     Source/Crunch.cpp
     Source/Crunch.h
+    Source/PedalCatalog.h
+    Source/DSP/StereoDelay.h
     Source/UI/Theme.h
     Source/UI/NeuralLookAndFeel.h
     Source/UI/Widgets.h

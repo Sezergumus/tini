@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../PluginProcessor.h"
+#include "../PedalCatalog.h"
 #include "Theme.h"
 #include "Widgets.h"
 
@@ -53,6 +54,7 @@ public:
         }
 
         // status (right)
+        header.removeFromRight ((float) headerRightInset);
         if (status.isNotEmpty())
         {
             const auto statusFont = Theme::ui (10.5f, true, 0.18f);
@@ -81,34 +83,81 @@ public:
         return getLocalBounds().withTrimmedTop (headerHeight).reduced (18, 16);
     }
 
+protected:
+    /** Space kept free at the right end of the header (e.g. for a button). */
+    int headerRightInset = 0;
+
 private:
     juce::String title, chip, status;
     bool statusDot = false;
 };
 
 //==============================================================================
-/** One stompbox: header, a grid of knobs, status LED and a footswitch bound to a bypass parameter. */
+/** Small round "x" that removes a pedal from the chain. */
+class RemoveButton : public juce::Button
+{
+public:
+    RemoveButton() : juce::Button ("remove")
+    {
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTooltip ("Remove pedal");
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (3.0f);
+
+        if (highlighted || down)
+        {
+            g.setColour (Theme::danger.withAlpha (down ? 0.35f : 0.20f));
+            g.fillEllipse (r);
+        }
+
+        auto c = r.getCentre();
+        const float k = r.getWidth() * 0.22f;
+        juce::Path x;
+        x.startNewSubPath (c.x - k, c.y - k);  x.lineTo (c.x + k, c.y + k);
+        x.startNewSubPath (c.x + k, c.y - k);  x.lineTo (c.x - k, c.y + k);
+
+        g.setColour (highlighted ? Theme::danger : Theme::textLo);
+        g.strokePath (x, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+};
+
+//==============================================================================
+/** One stompbox: header, a grid of knobs, status LED and a footswitch bound to a bypass parameter.
+    Everything (name, colour, knobs, parameters) comes from a PedalCatalog entry. */
 class PedalView : public juce::Component
 {
 public:
-    PedalView (const juce::String& pedalName, const juce::String& subtitleText, juce::Colour colour,
-               juce::AudioProcessorValueTreeState& state, const juce::String& activeParamID)
-        : name (pedalName), subtitle (subtitleText), tint (colour), apvts (state), footSwitch (colour)
+    static constexpr int width = 196;
+
+    PedalView (const PedalCatalog::Pedal& pedalInfo, juce::AudioProcessorValueTreeState& state)
+        : info (pedalInfo), tint (pedalInfo.colour), apvts (state), footSwitch (tint)
     {
         addAndMakeVisible (footSwitch);
-        activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, activeParamID, footSwitch);
+        activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, info.onID, footSwitch);
         lastActive = isActive();
+
+        for (const auto& k : info.knobs)
+        {
+            auto* knob = knobs.add (new LabeledKnob (k.label, tint, k.decimals, k.suffix));
+            knob->attach (apvts, k.paramID);
+            knob->setMaxDiameter (60);
+            addAndMakeVisible (knob);
+        }
+
+        if (info.isRemovable())
+        {
+            removeButton.onClick = [this] { if (onRemove) onRemove(); };
+            addAndMakeVisible (removeButton);
+        }
     }
 
-    void addKnob (const juce::String& label, const juce::String& paramID, int decimals, const juce::String& suffix = {})
-    {
-        auto* knob = knobs.add (new LabeledKnob (label, tint, decimals, suffix));
-        knob->attach (apvts, paramID);
-        knob->setMaxDiameter (68);
-        addAndMakeVisible (knob);
-    }
-
+    const PedalCatalog::Pedal& getInfo() const { return info; }
     bool isActive() const { return footSwitch.getToggleState(); }
+
+    std::function<void()> onRemove;
 
     /** Called from the UI timer so host automation of the bypass state is reflected too. */
     bool refresh()
@@ -152,15 +201,15 @@ public:
         // header
         auto header = r.removeFromTop (60.0f);
         g.setColour (on ? Theme::textHi : Theme::textMid);
-        g.setFont (Theme::ui (13.5f, true, 0.20f));
-        g.drawText (name, header.withTrimmedTop (14.0f).removeFromTop (20.0f), juce::Justification::centred, false);
+        g.setFont (Theme::ui (12.5f, true, 0.16f));
+        g.drawText (info.name, header.withTrimmedTop (15.0f).removeFromTop (20.0f), juce::Justification::centred, false);
 
         g.setColour (on ? tint.withAlpha (0.85f) : Theme::textLo);
-        g.setFont (Theme::ui (9.0f, true, 0.22f));
-        g.drawText (subtitle, header.withTrimmedTop (34.0f).removeFromTop (14.0f), juce::Justification::centred, false);
+        g.setFont (Theme::ui (8.5f, true, 0.2f));
+        g.drawText (info.subtitle, header.withTrimmedTop (35.0f).removeFromTop (14.0f), juce::Justification::centred, false);
 
         g.setColour (Theme::divider);
-        g.fillRect (r.getX() + 20.0f, header.getBottom(), r.getWidth() - 40.0f, 1.0f);
+        g.fillRect (r.getX() + 18.0f, header.getBottom(), r.getWidth() - 36.0f, 1.0f);
 
         // LED above the footswitch
         auto led = juce::Rectangle<float> (8.0f, 8.0f).withCentre (ledCentre);
@@ -178,21 +227,24 @@ public:
 
     void resized() override
     {
-        auto b = getLocalBounds().reduced (10, 0);
-        b.removeFromTop (66);
+        removeButton.setBounds (getWidth() - 30, 8, 22, 22);
 
-        auto footArea = b.removeFromBottom (112);
+        auto b = getLocalBounds().reduced (8, 0);
+        b.removeFromTop (64);
+
+        auto footArea = b.removeFromBottom (108);
         ledCentre = juce::Point<float> ((float) footArea.getCentreX(), (float) footArea.getY() + 14.0f);
-        footSwitch.setBounds (juce::Rectangle<int> (60, 60).withCentre ({ footArea.getCentreX(), footArea.getY() + 64 }));
+        footSwitch.setBounds (juce::Rectangle<int> (56, 56).withCentre ({ footArea.getCentreX(), footArea.getY() + 62 }));
 
-        // knob grid: two per row, last row centred
+        // knob grid: two per row, last row centred, the whole grid centred vertically
         const int n = knobs.size();
         if (n == 0)
             return;
 
         const int rows = (n + 1) / 2;
-        const int rowH = b.getHeight() / rows;
+        const int rowH = juce::jmin (b.getHeight() / 2, 124);
         const int cellW = b.getWidth() / 2;
+        const int top = b.getY() + (b.getHeight() - rows * rowH) / 2;
 
         for (int i = 0; i < n; ++i)
         {
@@ -200,18 +252,18 @@ public:
             const int inRow = juce::jmin (2, n - row * 2);
             const int col = i % 2;
 
-            const int rowW = inRow * cellW;
-            const int x0 = b.getX() + (b.getWidth() - rowW) / 2 + col * cellW;
-            knobs[i]->setBounds (x0, b.getY() + row * rowH, cellW, rowH);
+            const int x0 = b.getX() + (b.getWidth() - inRow * cellW) / 2 + col * cellW;
+            knobs[i]->setBounds (x0, top + row * rowH, cellW, rowH);
         }
     }
 
 private:
-    juce::String name, subtitle;
+    const PedalCatalog::Pedal& info;
     juce::Colour tint;
     juce::AudioProcessorValueTreeState& apvts;
 
     FootSwitch footSwitch;
+    RemoveButton removeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> activeAttachment;
     juce::OwnedArray<LabeledKnob> knobs;
 
@@ -272,79 +324,338 @@ private:
     juce::Rectangle<int> knobArea;
 };
 
+/** Placeholder card at the end of the chain: click to insert another pedal. */
+class AddPedalCard : public juce::Component
+{
+public:
+    static constexpr int width = 168;
+
+    std::function<void()> onClick;
+
+    AddPedalCard() { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (1.0f);
+        const float a = hover ? 1.0f : 0.6f;
+
+        if (hover)
+        {
+            g.setColour (Theme::accent.withAlpha (0.05f));
+            g.fillRoundedRectangle (r, 12.0f);
+        }
+
+        juce::Path outline, dashed;
+        outline.addRoundedRectangle (r.reduced (0.5f), 12.0f);
+        const float dashes[] = { 5.0f, 5.0f };
+        juce::PathStrokeType (1.2f).createDashedStroke (dashed, outline, dashes, 2);
+        g.setColour ((hover ? Theme::accent : Theme::panelBorder.brighter (0.25f)).withAlpha (a));
+        g.fillPath (dashed);
+
+        auto plus = juce::Rectangle<float> (50.0f, 50.0f).withCentre ({ r.getCentreX(), r.getCentreY() - 22.0f });
+        g.setColour (juce::Colours::white.withAlpha (hover ? 0.08f : 0.04f));
+        g.fillRoundedRectangle (plus, 10.0f);
+        g.setColour ((hover ? Theme::accent : Theme::panelBorder.brighter (0.4f)).withAlpha (a));
+        g.drawRoundedRectangle (plus.reduced (0.5f), 10.0f, 1.0f);
+
+        g.setColour (hover ? Theme::accent : Theme::textMid);
+        g.fillRoundedRectangle (plus.withSizeKeepingCentre (18.0f, 2.0f), 1.0f);
+        g.fillRoundedRectangle (plus.withSizeKeepingCentre (2.0f, 18.0f), 1.0f);
+
+        g.setColour (hover ? Theme::textHi : Theme::textMid);
+        g.setFont (Theme::ui (12.0f, true, 0.18f));
+        g.drawText ("ADD PEDAL", juce::Rectangle<float> (r.getX(), plus.getBottom() + 14.0f, r.getWidth(), 16.0f),
+                    juce::Justification::centred, false);
+
+        g.setColour (Theme::textLo);
+        g.setFont (Theme::ui (9.0f, true, 0.2f));
+        g.drawText ("GATE  BOOST  MOD  DELAY  REVERB",
+                    juce::Rectangle<float> (r.getX() + 6.0f, plus.getBottom() + 34.0f, r.getWidth() - 12.0f, 14.0f),
+                    juce::Justification::centred, false);
+    }
+
+    void mouseEnter (const juce::MouseEvent&) override { hover = true;  repaint(); }
+    void mouseExit  (const juce::MouseEvent&) override { hover = false; repaint(); }
+    void mouseUp (const juce::MouseEvent& e) override { if (e.mouseWasClicked() && onClick) onClick(); }
+
+private:
+    bool hover = false;
+};
+
+//==============================================================================
+/** Marks the point where the signal goes through the amp (pedals before it are pre-amp,
+    pedals after it are in the effects loop). */
+class AmpNode : public juce::Component
+{
+public:
+    static constexpr int width = 64;
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().withSizeKeepingCentre ((float) width - 8.0f, 148.0f);
+        Theme::drawInset (g, r, 10.0f);
+
+        const float heights[] = { 7.0f, 14.0f, 21.0f, 12.0f, 5.0f };
+        const float x0 = r.getCentreX() - 14.0f, cy = r.getCentreY() - 14.0f;
+        for (int i = 0; i < 5; ++i)
+        {
+            g.setColour (Theme::accent.withAlpha (i == 2 ? 1.0f : 0.6f));
+            g.fillRoundedRectangle (x0 + (float) i * 6.0f, cy - heights[i] * 0.5f, 3.0f, heights[i], 1.5f);
+        }
+
+        g.setColour (Theme::textHi);
+        g.setFont (Theme::ui (11.5f, true, 0.2f));
+        g.drawText ("AMP", r.withTop (r.getCentreY() + 4.0f).withHeight (16.0f), juce::Justification::centred, false);
+
+        g.setColour (Theme::textLo);
+        g.setFont (Theme::ui (8.0f, true, 0.2f));
+        g.drawText ("+ CAB", r.withTop (r.getCentreY() + 22.0f).withHeight (12.0f), juce::Justification::centred, false);
+    }
+};
+
+//==============================================================================
+/** The scrolling row of pedals: [pre-amp pedals] -> AMP -> [post-amp pedals] -> [+ add]. */
+class ChainStrip : public juce::Component
+{
+public:
+    explicit ChainStrip (juce::AudioProcessorValueTreeState& state) : apvts (state)
+    {
+        addAndMakeVisible (ampNode);
+        addChildComponent (addCard);
+    }
+
+    static bool isInChain (juce::AudioProcessorValueTreeState& state, const PedalCatalog::Pedal& p)
+    {
+        return ! p.isRemovable() || state.getRawParameterValue (p.addedID)->load() > 0.5f;
+    }
+
+    /** Recreates the pedals from the current parameter state. */
+    void rebuild()
+    {
+        pedals.clear();
+
+        for (const auto& info : PedalCatalog::all())
+            if (isInChain (apvts, info))
+                addAndMakeVisible (pedals.add (new PedalView (info, apvts)));
+
+        bool anyLeft = false;
+        for (const auto& info : PedalCatalog::all())
+            anyLeft = anyLeft || ! isInChain (apvts, info);
+        addCard.setVisible (anyLeft);
+    }
+
+    /** Positions every item for the given height and resizes the strip to fit. */
+    void layoutItems (int height)
+    {
+        gaps.clear();
+        const int gap = 28;
+        int x = 0;
+        bool ampPlaced = false;
+        int previousRight = -1;
+
+        auto place = [&] (juce::Component& c, int w, bool cable)
+        {
+            if (previousRight >= 0)
+            {
+                x += gap;
+                if (cable)
+                    gaps.push_back ({ previousRight, x });
+            }
+            c.setBounds (x, 0, w, height);
+            x += w;
+            previousRight = x;
+        };
+
+        for (auto* p : pedals)
+        {
+            if (! ampPlaced && p->getInfo().postAmp)
+            {
+                place (ampNode, AmpNode::width, true);
+                ampPlaced = true;
+            }
+            place (*p, PedalView::width, true);
+        }
+
+        if (! ampPlaced)
+            place (ampNode, AmpNode::width, true);
+
+        if (addCard.isVisible())
+            place (addCard, AddPedalCard::width, false);
+
+        setSize (x, height);
+    }
+
+    int getXOfLastPedal() const { return pedals.isEmpty() ? 0 : pedals.getLast()->getX(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        const float y = (float) getHeight() * 0.5f;
+
+        for (const auto& gap : gaps)
+        {
+            const float x0 = (float) gap.first, x1 = (float) gap.second;
+
+            g.setColour (juce::Colour (0xff2e353d));
+            g.fillRect (x0, y - 1.0f, x1 - x0, 2.0f);
+
+            juce::Path chevron;
+            const float cx = (x0 + x1) * 0.5f;
+            chevron.startNewSubPath (cx - 2.5f, y - 4.5f);
+            chevron.lineTo (cx + 2.5f, y);
+            chevron.lineTo (cx - 2.5f, y + 4.5f);
+            g.setColour (Theme::textMid);
+            g.strokePath (chevron, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    }
+
+    juce::OwnedArray<PedalView> pedals;
+    AddPedalCard addCard;
+
+private:
+    juce::AudioProcessorValueTreeState& apvts;
+    AmpNode ampNode;
+    std::vector<std::pair<int, int>> gaps;
+};
+
 //==============================================================================
 class SignalChainPanel : public PanelBase
 {
 public:
-    explicit SignalChainPanel (juce::AudioProcessorValueTreeState& apvts)
-        : PanelBase ("SIGNAL CHAIN"),
-          compressor ("COMPRESSOR", "STUDIO FET", Theme::accent, apvts, "COMP_ON"),
-          overdrive  ("OVERDRIVE",  "TS-MOD CIRCUIT", Theme::amber, apvts, "OD_ON")
+    explicit SignalChainPanel (juce::AudioProcessorValueTreeState& state)
+        : PanelBase ("SIGNAL CHAIN"), apvts (state), strip (state)
     {
-        compressor.addKnob ("SUSTAIN", "COMP_SUST", 0);
-        compressor.addKnob ("ATTACK",  "COMP_ATT",  0, " ms");
-        compressor.addKnob ("BLEND",   "COMP_MIX",  0, " %");
-        compressor.addKnob ("LEVEL",   "COMP_LVL",  1, " dB");
+        viewport.setViewedComponent (&strip, false);
+        viewport.setScrollBarsShown (false, true);
+        viewport.setScrollBarThickness (8);
+        addAndMakeVisible (viewport);
 
-        overdrive.addKnob ("GAIN",  "OD_GAIN", 1);
-        overdrive.addKnob ("TONE",  "OD_TONE", 1);
-        overdrive.addKnob ("LEVEL", "OD_LVL",  1);
+        strip.addCard.onClick = [this] { showAddMenu(); };
 
-        addAndMakeVisible (compressor);
-        addAndMakeVisible (overdrive);
-        refreshStatus();
+        addButton.setButtonText ("+  ADD PEDAL");
+        addButton.onClick = [this] { showAddMenu(); };
+        addAndMakeVisible (addButton);
+        headerRightInset = 124;
+
+        rebuild();
     }
 
+    /** Called from the UI timer: reflects automation / state changes and keeps the status text current. */
     void refresh()
     {
-        const bool a = compressor.refresh();
-        const bool b = overdrive.refresh();
-        if (a || b)
+        if (currentMask() != shownMask)
         {
-            refreshStatus();
-            repaint();
+            rebuild();
+            return;
         }
-    }
 
-    void paint (juce::Graphics& g) override
-    {
-        PanelBase::paint (g);
+        bool changed = false;
+        for (auto* p : strip.pedals)
+            changed = p->refresh() || changed;
 
-        // cable between the pedals
-        const float y = (float) compressor.getBounds().getCentreY();
-        const float x0 = (float) compressor.getRight();
-        const float x1 = (float) overdrive.getX();
-
-        g.setColour (juce::Colour (0xff2e353d));
-        g.fillRect (x0, y - 1.0f, x1 - x0, 2.0f);
-
-        juce::Path chevron;
-        const float cx = (x0 + x1) * 0.5f;
-        chevron.startNewSubPath (cx - 3.0f, y - 5.0f);
-        chevron.lineTo (cx + 3.0f, y);
-        chevron.lineTo (cx - 3.0f, y + 5.0f);
-        g.setColour (Theme::textMid);
-        g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (changed)
+            updateStatus();
     }
 
     void resized() override
     {
+        addButton.setBounds (getWidth() - 20 - 108, (headerHeight - 28) / 2, 108, 28);
+
         auto b = getContentBounds();
-        const int gap = 36;
-        const int w = (b.getWidth() - gap) / 2;
-        compressor.setBounds (b.removeFromLeft (w));
-        b.removeFromLeft (gap);
-        overdrive.setBounds (b);
+        viewport.setBounds (b.withHeight (b.getHeight() + 10));
+        strip.layoutItems (b.getHeight());
     }
 
 private:
-    void refreshStatus()
+    int currentMask() const
     {
-        const int active = (compressor.isActive() ? 1 : 0) + (overdrive.isActive() ? 1 : 0);
-        setStatus (juce::String (active) + " / 2 ACTIVE", false);
+        int mask = 0, bit = 0;
+        for (const auto& info : PedalCatalog::all())
+            mask |= (ChainStrip::isInChain (apvts, info) ? 1 : 0) << bit++;
+        return mask;
     }
 
-    PedalView compressor, overdrive;
+    void rebuild()
+    {
+        shownMask = currentMask();
+        strip.rebuild();
+
+        for (auto* p : strip.pedals)
+        {
+            if (p->getInfo().isRemovable())
+            {
+                const auto* info = &p->getInfo();
+                p->onRemove = [self = this, info]
+                {
+                    self->setAdded (*info, false);
+                    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<SignalChainPanel> (self)]
+                    {
+                        if (safe != nullptr)
+                            safe->refresh();
+                    });
+                };
+            }
+        }
+
+        strip.layoutItems (getContentBounds().getHeight());
+        updateStatus();
+        repaint();
+    }
+
+    void updateStatus()
+    {
+        int active = 0;
+        for (auto* p : strip.pedals)
+            active += p->isActive() ? 1 : 0;
+
+        setStatus (juce::String (active) + " / " + juce::String (strip.pedals.size()) + " ACTIVE", false);
+        addButton.setEnabled (strip.addCard.isVisible());
+    }
+
+    void setAdded (const PedalCatalog::Pedal& info, bool added)
+    {
+        if (auto* param = apvts.getParameter (info.addedID))
+        {
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (added ? 1.0f : 0.0f);
+            param->endChangeGesture();
+        }
+    }
+
+    void showAddMenu()
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("INSERT PEDAL");
+
+        const auto& all = PedalCatalog::all();
+        for (int i = 0; i < (int) all.size(); ++i)
+        {
+            const auto& info = all[(size_t) i];
+            if (! ChainStrip::isInChain (apvts, info))
+                menu.addItem (i + 1, juce::String (info.name) + "   -   " + (info.postAmp ? "after amp" : "before amp"));
+        }
+
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addButton),
+                            [safe = juce::Component::SafePointer<SignalChainPanel> (this)] (int result)
+        {
+            if (safe == nullptr || result <= 0)
+                return;
+
+            const auto& info = PedalCatalog::all()[(size_t) (result - 1)];
+            safe->setAdded (info, true);
+            safe->rebuild();
+
+            // bring the new pedal into view
+            for (auto* p : safe->strip.pedals)
+                if (&p->getInfo() == &info)
+                    safe->viewport.setViewPosition (juce::jmax (0, p->getRight() - safe->viewport.getMaximumVisibleWidth() + 40), 0);
+        });
+    }
+
+    juce::AudioProcessorValueTreeState& apvts;
+    ChainStrip strip;
+    juce::Viewport viewport;
+    juce::TextButton addButton;
+    int shownMask = 0;
 };
 
 //==============================================================================

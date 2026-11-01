@@ -16,6 +16,26 @@ public:
         setColour (juce::TextEditor::outlineColourId,      Theme::accent.withAlpha (0.6f));
         setColour (juce::TextEditor::focusedOutlineColourId, Theme::accent);
         setColour (juce::CaretComponent::caretColourId,    Theme::accent);
+
+        setColour (juce::PopupMenu::backgroundColourId,            Theme::panelTop);
+        setColour (juce::PopupMenu::textColourId,                  Theme::textHi);
+        setColour (juce::PopupMenu::headerTextColourId,            Theme::textLo);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, Theme::accent.withAlpha (0.20f));
+        setColour (juce::PopupMenu::highlightedTextColourId,       Theme::textHi);
+    }
+
+    //==========================================================================
+    void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height,
+                        bool isVertical, int thumbStart, int thumbSize, bool over, bool down) override
+    {
+        auto track = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height);
+        g.setColour (juce::Colours::white.withAlpha (0.04f));
+        g.fillRoundedRectangle (track.reduced (isVertical ? 2.0f : 0.0f, isVertical ? 0.0f : 2.0f), 3.0f);
+
+        auto thumb = isVertical ? juce::Rectangle<float> ((float) x, (float) thumbStart, (float) width, (float) thumbSize)
+                                : juce::Rectangle<float> ((float) thumbStart, (float) y, (float) thumbSize, (float) height);
+        g.setColour (over || down ? Theme::accent.withAlpha (0.75f) : juce::Colours::white.withAlpha (0.20f));
+        g.fillRoundedRectangle (thumb.reduced (isVertical ? 2.0f : 0.0f, isVertical ? 0.0f : 2.0f), 3.0f);
     }
 
     //==========================================================================
