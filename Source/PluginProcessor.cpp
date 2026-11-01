@@ -102,6 +102,7 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 	spec.numChannels = getTotalNumOutputChannels();
 
 	eqChain.prepare(spec);
+	lastLowDb = lastMidDb = lastHighDb = 1000.0f; // force coefficient refresh
 
 	cabSimulator.prepare(spec);
 	cabLowCut.prepare(spec);
@@ -201,9 +202,23 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 	float midDb = juce::jmap(apvts.getRawParameterValue("MID")->load(), 0.0f, 10.0f, -15.0f, 15.0f);
     float highDb = juce::jmap(apvts.getRawParameterValue("HIGH")->load(), 0.0f, 10.0f, -15.0f, 15.0f);
 
-    *eqChain.get<0>().coefficients = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(getSampleRate(), 250.0f, 0.707f, juce::Decibels::decibelsToGain(lowDb));
-    *eqChain.get<1>().coefficients = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(getSampleRate(), 1000.0f, 0.707f, juce::Decibels::decibelsToGain(midDb));
-    *eqChain.get<2>().coefficients = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(getSampleRate(), 4000.0f, 0.707f, juce::Decibels::decibelsToGain(highDb));
+    const auto sr = getSampleRate();
+
+    if (lowDb != lastLowDb)
+    {
+        *eqChain.get<0>().state = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(sr, 250.0f, 0.707f, juce::Decibels::decibelsToGain(lowDb));
+        lastLowDb = lowDb;
+    }
+    if (midDb != lastMidDb)
+    {
+        *eqChain.get<1>().state = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(sr, 1000.0f, 0.707f, juce::Decibels::decibelsToGain(midDb));
+        lastMidDb = midDb;
+    }
+    if (highDb != lastHighDb)
+    {
+        *eqChain.get<2>().state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(sr, 4000.0f, 0.707f, juce::Decibels::decibelsToGain(highDb));
+        lastHighDb = highDb;
+    }
 
 	eqChain.process(context);
 

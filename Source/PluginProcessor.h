@@ -78,8 +78,10 @@ private:
 
     Crunch crunchEffect;
 
-	using Filter = juce::dsp::IIR::Filter<float>;
-	juce::dsp::ProcessorChain<Filter, Filter, Filter> eqChain;
+	// ProcessorDuplicator keeps one filter state per channel (a bare IIR::Filter is mono).
+	using EqBand = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>>;
+	juce::dsp::ProcessorChain<EqBand, EqBand, EqBand> eqChain;
+	float lastLowDb = 1000.0f, lastMidDb = 1000.0f, lastHighDb = 1000.0f;
 
     juce::dsp::Compressor<float> compressor;
     juce::dsp::WaveShaper<float> overdrive;

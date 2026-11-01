@@ -173,6 +173,38 @@ namespace
 
         irFile.deleteFile();
     }
+    float rms (const juce::AudioBuffer<float>& buf, int channel, int from)
+    {
+        double sum = 0.0;
+        for (int i = from; i < buf.getNumSamples(); ++i)
+            sum += (double) buf.getSample (channel, i) * buf.getSample (channel, i);
+        return (float) std::sqrt (sum / (buf.getNumSamples() - from));
+    }
+
+    void testEqProcessesBothChannels()
+    {
+        Prepared prepared;
+        auto& p = prepared.proc;
+        makeTransparent (p);
+        setParam (p, "LOW", 10.0f);   // +15 dB low shelf
+
+        auto sine = [] (int block, juce::AudioBuffer<float>& buf)
+        {
+            for (int i = 0; i < buf.getNumSamples(); ++i)
+            {
+                const float v = 0.02f * std::sin (juce::MathConstants<float>::twoPi * 100.0f
+                                                  * (float) (block * blockSize + i) / (float) sampleRate);
+                buf.setSample (0, i, v);
+                buf.setSample (1, i, v);
+            }
+        };
+
+        const auto out = run (p, 20, sine);
+        const float left = rms (out, 0, 4 * blockSize), right = rms (out, 1, 4 * blockSize);
+
+        check (left > 0.0f && std::abs (left - right) / left < 0.05f,
+               "EQ treats both channels equally (L rms " + juce::String (left, 4) + ", R rms " + juce::String (right, 4) + ")");
+    }
 }
 
 int main()
@@ -181,6 +213,7 @@ int main()
 
     testIrIsApplied();
     testStateRoundTrip();
+    testEqProcessesBothChannels();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;
