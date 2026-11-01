@@ -125,16 +125,41 @@ public:
 };
 
 //==============================================================================
+/** Invisible strip over a pedal's header: shows the grab cursor and six dots, and lets the
+    ChainStrip pick up mouse events to drag the pedal around. */
+class DragGrip : public juce::Component
+{
+public:
+    DragGrip() { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (hover ? Theme::textMid : Theme::textLo.withAlpha (0.8f));
+        for (int col = 0; col < 2; ++col)
+            for (int row = 0; row < 3; ++row)
+                g.fillEllipse (14.0f + (float) col * 5.0f, 17.0f + (float) row * 5.0f, 2.4f, 2.4f);
+    }
+
+    void mouseEnter (const juce::MouseEvent&) override { hover = true;  repaint(); }
+    void mouseExit  (const juce::MouseEvent&) override { hover = false; repaint(); }
+
+private:
+    bool hover = false;
+};
+
+//==============================================================================
 /** One stompbox: header, a grid of knobs, status LED and a footswitch bound to a bypass parameter.
     Everything (name, colour, knobs, parameters) comes from a PedalCatalog entry. */
 class PedalView : public juce::Component
 {
 public:
     static constexpr int width = 196;
+    static constexpr int headerHeight = 60;
 
     PedalView (const PedalCatalog::Pedal& pedalInfo, juce::AudioProcessorValueTreeState& state)
         : info (pedalInfo), tint (pedalInfo.colour), apvts (state), footSwitch (tint)
     {
+        addAndMakeVisible (grip);
         addAndMakeVisible (footSwitch);
         activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, info.onID, footSwitch);
         lastActive = isActive();
@@ -156,6 +181,7 @@ public:
 
     const PedalCatalog::Pedal& getInfo() const { return info; }
     bool isActive() const { return footSwitch.getToggleState(); }
+    DragGrip& getGrip() { return grip; }
 
     std::function<void()> onRemove;
 
@@ -199,7 +225,7 @@ public:
         g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
 
         // header
-        auto header = r.removeFromTop (60.0f);
+        auto header = r.removeFromTop ((float) headerHeight);
         g.setColour (on ? Theme::textHi : Theme::textMid);
         g.setFont (Theme::ui (12.5f, true, 0.16f));
         g.drawText (info.name, header.withTrimmedTop (15.0f).removeFromTop (20.0f), juce::Justification::centred, false);
@@ -227,10 +253,11 @@ public:
 
     void resized() override
     {
+        grip.setBounds (0, 0, getWidth(), headerHeight);
         removeButton.setBounds (getWidth() - 30, 8, 22, 22);
 
         auto b = getLocalBounds().reduced (8, 0);
-        b.removeFromTop (64);
+        b.removeFromTop (headerHeight + 4);
 
         auto footArea = b.removeFromBottom (108);
         ledCentre = juce::Point<float> ((float) footArea.getCentreX(), (float) footArea.getY() + 14.0f);
@@ -262,6 +289,7 @@ private:
     juce::Colour tint;
     juce::AudioProcessorValueTreeState& apvts;
 
+    DragGrip grip;
     FootSwitch footSwitch;
     RemoveButton removeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> activeAttachment;
@@ -383,20 +411,34 @@ private:
 };
 
 //==============================================================================
-/** Marks the point where the signal goes through the amp (pedals before it are pre-amp,
-    pedals after it are in the effects loop). */
+/** Marks the point where the signal goes through the amp. It is an item of the chain like the
+    pedals: drag it to put pedals on the other side. */
 class AmpNode : public juce::Component
 {
 public:
     static constexpr int width = 64;
+
+    AmpNode() { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
 
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat().withSizeKeepingCentre ((float) width - 8.0f, 148.0f);
         Theme::drawInset (g, r, 10.0f);
 
+        if (hover)
+        {
+            g.setColour (Theme::accent.withAlpha (0.55f));
+            g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.0f);
+        }
+
+        // grip dots
+        g.setColour (hover ? Theme::textMid : Theme::textLo.withAlpha (0.8f));
+        for (int col = 0; col < 3; ++col)
+            for (int row = 0; row < 2; ++row)
+                g.fillEllipse (r.getCentreX() - 7.5f + (float) col * 5.0f, r.getY() + 9.0f + (float) row * 5.0f, 2.4f, 2.4f);
+
         const float heights[] = { 7.0f, 14.0f, 21.0f, 12.0f, 5.0f };
-        const float x0 = r.getCentreX() - 14.0f, cy = r.getCentreY() - 14.0f;
+        const float x0 = r.getCentreX() - 14.0f, cy = r.getCentreY() - 10.0f;
         for (int i = 0; i < 5; ++i)
         {
             g.setColour (Theme::accent.withAlpha (i == 2 ? 1.0f : 0.6f));
@@ -405,22 +447,37 @@ public:
 
         g.setColour (Theme::textHi);
         g.setFont (Theme::ui (11.5f, true, 0.2f));
-        g.drawText ("AMP", r.withTop (r.getCentreY() + 4.0f).withHeight (16.0f), juce::Justification::centred, false);
+        g.drawText ("AMP", r.withTop (r.getCentreY() + 8.0f).withHeight (16.0f), juce::Justification::centred, false);
 
         g.setColour (Theme::textLo);
         g.setFont (Theme::ui (8.0f, true, 0.2f));
-        g.drawText ("+ CAB", r.withTop (r.getCentreY() + 22.0f).withHeight (12.0f), juce::Justification::centred, false);
+        g.drawText ("+ CAB", r.withTop (r.getCentreY() + 26.0f).withHeight (12.0f), juce::Justification::centred, false);
     }
+
+    void mouseEnter (const juce::MouseEvent&) override { hover = true;  repaint(); }
+    void mouseExit  (const juce::MouseEvent&) override { hover = false; repaint(); }
+
+private:
+    bool hover = false;
 };
 
 //==============================================================================
-/** The scrolling row of pedals: [pre-amp pedals] -> AMP -> [post-amp pedals] -> [+ add]. */
-class ChainStrip : public juce::Component
+/** The scrolling row of chain items (pedals and the amp, in signal order) followed by the
+    "+ add" card. Items can be dragged sideways to change their place in the chain. */
+class ChainStrip : public juce::Component, private juce::Timer
 {
 public:
-    explicit ChainStrip (juce::AudioProcessorValueTreeState& state) : apvts (state)
+    /** One thing in the chain: a catalog pedal index, or PedalCatalog::ampItem. */
+    struct Item
+    {
+        int id;
+        juce::Component* comp;
+    };
+
+    explicit ChainStrip (NeuralFlowAmpAudioProcessor& p) : processor (p), apvts (p.apvts)
     {
         addAndMakeVisible (ampNode);
+        ampNode.addMouseListener (this, false);
         addChildComponent (addCard);
     }
 
@@ -429,14 +486,35 @@ public:
         return ! p.isRemovable() || state.getRawParameterValue (p.addedID)->load() > 0.5f;
     }
 
-    /** Recreates the pedals from the current parameter state. */
+    /** Called after the user dropped an item in a new place, with the item ids in their new order. */
+    std::function<void (const std::vector<int>&)> onOrderChanged;
+
+    /** Recreates the pedals from the current parameter state and the processor's chain order. */
     void rebuild()
     {
+        endDrag();
+        animator.cancelAllAnimations (false);
+
+        items.clear();
         pedals.clear();
 
-        for (const auto& info : PedalCatalog::all())
-            if (isInChain (apvts, info))
-                addAndMakeVisible (pedals.add (new PedalView (info, apvts)));
+        for (int id : processor.getChainOrder())
+        {
+            if (id == PedalCatalog::ampItem)
+            {
+                items.push_back ({ id, &ampNode });
+                continue;
+            }
+
+            const auto& info = PedalCatalog::all()[(size_t) id];
+            if (! isInChain (apvts, info))
+                continue;
+
+            auto* view = pedals.add (new PedalView (info, apvts));
+            addAndMakeVisible (view);
+            view->getGrip().addMouseListener (this, false);
+            items.push_back ({ id, view });
+        }
 
         bool anyLeft = false;
         for (const auto& info : PedalCatalog::all())
@@ -445,47 +523,153 @@ public:
     }
 
     /** Positions every item for the given height and resizes the strip to fit. */
-    void layoutItems (int height)
+    void layoutItems (int height, bool animate = false)
     {
+        stripHeight = height;
         gaps.clear();
+        targets.assign (items.size(), {});
+
         const int gap = 28;
         int x = 0;
-        bool ampPlaced = false;
-        int previousRight = -1;
 
-        auto place = [&] (juce::Component& c, int w, bool cable)
+        for (size_t i = 0; i < items.size(); ++i)
         {
-            if (previousRight >= 0)
+            const int w = items[i].comp == &ampNode ? AmpNode::width : PedalView::width;
+            if (i > 0)
             {
+                gaps.push_back ({ x, x + gap });
                 x += gap;
-                if (cable)
-                    gaps.push_back ({ previousRight, x });
             }
-            c.setBounds (x, 0, w, height);
+            targets[i] = { x, 0, w, height };
             x += w;
-            previousRight = x;
-        };
+        }
+        itemsRight = x;
 
-        for (auto* p : pedals)
+        juce::Rectangle<int> addBounds;
+        if (addCard.isVisible())
         {
-            if (! ampPlaced && p->getInfo().postAmp)
-            {
-                place (ampNode, AmpNode::width, true);
-                ampPlaced = true;
-            }
-            place (*p, PedalView::width, true);
+            x += gap;
+            addBounds = { x, 0, AddPedalCard::width, height };
+            x += AddPedalCard::width;
         }
 
-        if (! ampPlaced)
-            place (ampNode, AmpNode::width, true);
+        setSize (x, height);
+
+        for (size_t i = 0; i < items.size(); ++i)
+            if (! (dragging && (int) i == dragIndex))
+                moveTo (*items[i].comp, targets[i], animate);
 
         if (addCard.isVisible())
-            place (addCard, AddPedalCard::width, false);
-
-        setSize (x, height);
+            moveTo (addCard, addBounds, animate);
     }
 
-    int getXOfLastPedal() const { return pedals.isEmpty() ? 0 : pedals.getLast()->getX(); }
+    bool isDragging() const { return dragging; }
+
+    /** Ids of the items in their current order. */
+    std::vector<int> getItemOrder() const
+    {
+        std::vector<int> ids;
+        for (const auto& item : items)
+            ids.push_back (item.id);
+        return ids;
+    }
+
+    //==========================================================================
+    // Drag and drop. The mouse handlers below call these; they are public so tests can drive them.
+
+    /** Arms a drag on `comp`; nothing moves until the pointer travels a few pixels. */
+    void startDrag (juce::Component& comp, juce::Point<int> stripPos)
+    {
+        endDrag();
+
+        for (size_t i = 0; i < items.size(); ++i)
+        {
+            if (items[i].comp != &comp)
+                continue;
+
+            dragIndex = (int) i;
+            downPos = stripPos;
+            grabOffsetX = stripPos.x - comp.getX();
+            orderAtStart = getItemOrder();
+            armed = true;
+            return;
+        }
+    }
+
+    void dragTo (juce::Point<int> stripPos)
+    {
+        if (! armed)
+            return;
+
+        auto& comp = *items[(size_t) dragIndex].comp;
+
+        if (! dragging)
+        {
+            if (stripPos.getDistanceFrom (downPos) < 6)
+                return;
+
+            dragging = true;
+            animator.cancelAnimation (&comp, false);
+            comp.toFront (false);
+            comp.setAlpha (0.96f);
+            startTimerHz (60);
+        }
+
+        const int x = juce::jlimit (0, juce::jmax (0, itemsRight - comp.getWidth()), stripPos.x - grabOffsetX);
+        comp.setTopLeftPosition (x, 0);
+
+        // Swap with a neighbour once the dragged item's centre passes the neighbour's centre.
+        const int centre = x + comp.getWidth() / 2;
+
+        while (dragIndex + 1 < (int) items.size() && centre > targets[(size_t) dragIndex + 1].getCentreX())
+        {
+            std::swap (items[(size_t) dragIndex], items[(size_t) dragIndex + 1]);
+            ++dragIndex;
+            layoutItems (stripHeight, true);
+        }
+        while (dragIndex > 0 && centre < targets[(size_t) dragIndex - 1].getCentreX())
+        {
+            std::swap (items[(size_t) dragIndex], items[(size_t) dragIndex - 1]);
+            --dragIndex;
+            layoutItems (stripHeight, true);
+        }
+
+        repaint();
+    }
+
+    void endDrag()
+    {
+        if (! armed)
+            return;
+
+        const bool wasDragging = dragging;
+        auto* comp = items[(size_t) dragIndex].comp;
+
+        armed = dragging = false;
+        stopTimer();
+
+        if (wasDragging)
+        {
+            comp->setAlpha (1.0f);
+            animator.animateComponent (comp, targets[(size_t) dragIndex], 1.0f, 140, false, 1.0, 1.0);
+
+            if (getItemOrder() != orderAtStart && onOrderChanged)
+                onOrderChanged (getItemOrder());
+        }
+
+        dragIndex = -1;
+        repaint();
+    }
+
+    //==========================================================================
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (auto* comp = findItemComponent (e.originalComponent))
+            startDrag (*comp, e.getEventRelativeTo (this).getPosition());
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override { dragTo (e.getEventRelativeTo (this).getPosition()); }
+    void mouseUp (const juce::MouseEvent&) override     { endDrag(); }
 
     void paint (juce::Graphics& g) override
     {
@@ -506,23 +690,290 @@ public:
             g.setColour (Theme::textMid);
             g.strokePath (chevron, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
+
+        if (dragging && juce::isPositiveAndBelow (dragIndex, (int) items.size()))
+        {
+            // where the item will land
+            auto slot = targets[(size_t) dragIndex].toFloat().reduced (1.0f);
+            g.setColour (Theme::accent.withAlpha (0.05f));
+            g.fillRoundedRectangle (slot, 12.0f);
+
+            juce::Path outline, dashed;
+            outline.addRoundedRectangle (slot.reduced (0.5f), 12.0f);
+            const float dashes[] = { 5.0f, 5.0f };
+            juce::PathStrokeType (1.2f).createDashedStroke (dashed, outline, dashes, 2);
+            g.setColour (Theme::accent.withAlpha (0.7f));
+            g.fillPath (dashed);
+
+            // lift: shadow under the item being carried
+            juce::DropShadow (juce::Colours::black.withAlpha (0.65f), 22, { 0, 8 })
+                .drawForRectangle (g, items[(size_t) dragIndex].comp->getBounds());
+        }
     }
 
     juce::OwnedArray<PedalView> pedals;
     AddPedalCard addCard;
 
 private:
+    void timerCallback() override
+    {
+        auto mouse = juce::Desktop::getInstance().getMainMouseSource();
+        if (! dragging || ! mouse.isDragging())
+            return;
+
+        auto* viewport = findParentComponentOfClass<juce::Viewport>();
+        if (viewport == nullptr)
+            return;
+
+        // scroll the strip when an item is held near either edge
+        const auto screenPos = mouse.getScreenPosition();
+        const auto inViewport = viewport->getLocalPoint (nullptr, screenPos).roundToInt();
+
+        const int edge = 56, visible = viewport->getMaximumVisibleWidth();
+        int dx = 0;
+        if (inViewport.x < edge)            dx = -(2 + (edge - inViewport.x) / 4);
+        else if (inViewport.x > visible - edge) dx = 2 + (inViewport.x - (visible - edge)) / 4;
+
+        if (dx != 0)
+        {
+            viewport->setViewPosition (juce::jmax (0, viewport->getViewPositionX() + dx), 0);
+            dragTo (getLocalPoint (nullptr, screenPos).roundToInt());
+        }
+    }
+
+    juce::Component* findItemComponent (juce::Component* c) const
+    {
+        for (; c != nullptr && c != this; c = c->getParentComponent())
+            for (const auto& item : items)
+                if (item.comp == c)
+                    return c;
+        return nullptr;
+    }
+
+    void moveTo (juce::Component& comp, juce::Rectangle<int> bounds, bool animate)
+    {
+        if (comp.getBounds() == bounds)
+            return;
+
+        if (animate && comp.isVisible() && comp.getWidth() > 0)
+        {
+            animator.animateComponent (&comp, bounds, 1.0f, 140, false, 1.0, 1.0);
+        }
+        else
+        {
+            animator.cancelAnimation (&comp, false);
+            comp.setBounds (bounds);
+        }
+    }
+
+    NeuralFlowAmpAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
     AmpNode ampNode;
+    juce::ComponentAnimator animator;
+
+    std::vector<Item> items;
+    std::vector<juce::Rectangle<int>> targets;
     std::vector<std::pair<int, int>> gaps;
+    int stripHeight = 0, itemsRight = 0;
+
+    bool armed = false, dragging = false;
+    int dragIndex = -1, grabOffsetX = 0;
+    juce::Point<int> downPos;
+    std::vector<int> orderAtStart;
+};
+
+//==============================================================================
+/** One selectable line in the add-pedal popover. */
+class PedalRow : public juce::Button
+{
+public:
+    static constexpr int height = 58;
+
+    PedalRow (const PedalCatalog::Pedal& pedalInfo, bool alreadyInChain)
+        : juce::Button (juce::String ("row_") + pedalInfo.addedID),
+          info (pedalInfo), tint (pedalInfo.colour), inChain (alreadyInChain)
+    {
+        setEnabled (! inChain);
+        setMouseCursor (inChain ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
+
+        for (const auto& k : info.knobs)
+            knobNames += (knobNames.isEmpty() ? juce::String() : juce::String (juce::CharPointer_UTF8 ("  \xc2\xb7  "))) + juce::String (k.label);
+    }
+
+    const PedalCatalog::Pedal& getInfo() const { return info; }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (1.0f);
+        const float alpha = inChain ? 0.45f : 1.0f;
+        const bool hot = isEnabled() && (highlighted || down);
+
+        if (hot)
+        {
+            g.setGradientFill (juce::ColourGradient (tint.withAlpha (down ? 0.20f : 0.13f), r.getX(), r.getY(),
+                                                     tint.withAlpha (0.03f), r.getRight(), r.getY(), false));
+            g.fillRoundedRectangle (r, 9.0f);
+            g.setColour (tint.withAlpha (0.55f));
+            g.drawRoundedRectangle (r.reduced (0.5f), 9.0f, 1.0f);
+        }
+
+        // tile with a little knob
+        auto tile = juce::Rectangle<float> (38.0f, 38.0f).withCentre ({ r.getX() + 12.0f + 19.0f, r.getCentreY() });
+        g.setColour (tint.withAlpha (0.13f * alpha));
+        g.fillRoundedRectangle (tile, 9.0f);
+        g.setColour (tint.withAlpha (0.5f * alpha));
+        g.drawRoundedRectangle (tile.reduced (0.5f), 9.0f, 1.0f);
+
+        const auto c = tile.getCentre();
+        g.setColour (tint.withAlpha (0.9f * alpha));
+        g.drawEllipse (c.x - 9.0f, c.y - 9.0f, 18.0f, 18.0f, 1.6f);
+        juce::Path pointer;
+        pointer.addRoundedRectangle (-1.0f, -9.0f, 2.0f, 8.0f, 1.0f);
+        pointer.applyTransform (juce::AffineTransform::rotation (juce::degreesToRadians (35.0f)).translated (c.x, c.y));
+        g.fillPath (pointer);
+
+        // text
+        const float textX = r.getX() + 12.0f + 38.0f + 14.0f;
+        const float textW = r.getWidth() - (textX - r.getX()) - 96.0f;
+
+        g.setColour (Theme::textHi.withAlpha (alpha));
+        g.setFont (Theme::ui (12.5f, true, 0.12f));
+        g.drawText (info.name, juce::Rectangle<float> (textX, r.getCentreY() - 18.0f, textW, 18.0f),
+                    juce::Justification::centredLeft, false);
+
+        g.setColour (Theme::textLo.withAlpha (juce::jmin (1.0f, alpha + 0.2f)));
+        g.setFont (Theme::ui (9.0f, true, 0.1f));
+        g.drawText (knobNames, juce::Rectangle<float> (textX, r.getCentreY() + 2.0f, textW, 14.0f),
+                    juce::Justification::centredLeft, false);
+
+        // right side: category chip, or "in chain"
+        const float rightEdge = r.getRight() - 12.0f;
+        if (inChain)
+        {
+            const auto font = Theme::ui (9.0f, true, 0.16f);
+            const float w = font.getStringWidthFloat ("IN CHAIN");
+            g.setColour (Theme::textLo);
+            g.setFont (font);
+            g.drawText ("IN CHAIN", juce::Rectangle<float> (rightEdge - w - 2.0f, r.getCentreY() - 8.0f, w + 2.0f, 16.0f),
+                        juce::Justification::centredRight, false);
+
+            juce::Path tick;
+            const float tx = rightEdge - w - 20.0f, ty = r.getCentreY();
+            tick.startNewSubPath (tx, ty);
+            tick.lineTo (tx + 3.0f, ty + 3.5f);
+            tick.lineTo (tx + 9.0f, ty - 3.5f);
+            g.strokePath (tick, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        else
+        {
+            const auto font = Theme::ui (8.5f, true, 0.2f);
+            const float w = font.getStringWidthFloat (info.category) + 18.0f;
+            auto chip = juce::Rectangle<float> (rightEdge - w, r.getCentreY() - 10.0f, w, 20.0f);
+            g.setColour (tint.withAlpha (hot ? 0.24f : 0.13f));
+            g.fillRoundedRectangle (chip, 5.0f);
+            g.setColour (tint.withAlpha (0.95f));
+            g.setFont (font);
+            g.drawText (info.category, chip, juce::Justification::centred, false);
+        }
+    }
+
+private:
+    const PedalCatalog::Pedal& info;
+    juce::Colour tint;
+    bool inChain;
+    juce::String knobNames;
+};
+
+/** Contents of the call-out that opens from "+ ADD PEDAL": one row per pedal that can be added. */
+class AddPedalMenu : public juce::Component
+{
+public:
+    static constexpr int width = 330;
+
+    std::function<void (const PedalCatalog::Pedal&)> onPick;
+
+    explicit AddPedalMenu (juce::AudioProcessorValueTreeState& apvts)
+    {
+        for (const auto& info : PedalCatalog::all())
+        {
+            if (! info.isRemovable())
+                continue;
+
+            const bool inChain = ChainStrip::isInChain (apvts, info);
+            available += inChain ? 0 : 1;
+
+            auto* row = rows.add (new PedalRow (info, inChain));
+            row->onClick = [this, row]
+            {
+                if (onPick)
+                    onPick (row->getInfo());
+
+                if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+                    box->dismiss();
+            };
+            addAndMakeVisible (row);
+        }
+
+        setSize (width, padding + headerHeight + rows.size() * (PedalRow::height + rowGap) + footerHeight);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced ((float) padding, 0.0f);
+        auto header = r.withTrimmedTop ((float) padding).removeFromTop ((float) headerHeight);
+
+        g.setColour (Theme::textHi);
+        g.setFont (Theme::ui (12.0f, true, 0.2f));
+        g.drawText ("ADD PEDAL", header.withTrimmedBottom (4.0f), juce::Justification::centredLeft, false);
+
+        g.setColour (Theme::textLo);
+        g.setFont (Theme::ui (9.0f, true, 0.18f));
+        g.drawText (available > 0 ? juce::String (available) + " AVAILABLE" : juce::String ("ALL IN USE"),
+                    header.withTrimmedBottom (4.0f), juce::Justification::centredRight, false);
+
+        g.setColour (Theme::divider.withAlpha (0.10f));
+        g.fillRect (r.getX(), header.getBottom() - 4.0f, r.getWidth(), 1.0f);
+
+        auto footer = getLocalBounds().toFloat().removeFromBottom ((float) footerHeight).reduced ((float) padding, 0.0f);
+        g.setColour (Theme::textLo);
+        g.setFont (Theme::ui (8.5f, true, 0.16f));
+        g.drawText ("DRAG PEDALS IN THE CHAIN TO REORDER THEM", footer.withTrimmedBottom (4.0f),
+                    juce::Justification::centredLeft, false);
+    }
+
+    void resized() override
+    {
+        auto b = getLocalBounds().reduced (padding, 0);
+        b.removeFromTop (padding + headerHeight);
+
+        for (auto* row : rows)
+        {
+            row->setBounds (b.removeFromTop (PedalRow::height));
+            b.removeFromTop (rowGap);
+        }
+    }
+
+    PedalRow* findRow (const juce::String& addedID) const
+    {
+        for (auto* row : rows)
+            if (addedID == row->getInfo().addedID)
+                return row;
+        return nullptr;
+    }
+
+private:
+    static constexpr int padding = 10, headerHeight = 34, footerHeight = 28, rowGap = 4;
+
+    juce::OwnedArray<PedalRow> rows;
+    int available = 0;
 };
 
 //==============================================================================
 class SignalChainPanel : public PanelBase
 {
 public:
-    explicit SignalChainPanel (juce::AudioProcessorValueTreeState& state)
-        : PanelBase ("SIGNAL CHAIN"), apvts (state), strip (state)
+    explicit SignalChainPanel (NeuralFlowAmpAudioProcessor& p)
+        : PanelBase ("SIGNAL CHAIN"), processor (p), apvts (p.apvts), strip (p)
     {
         viewport.setViewedComponent (&strip, false);
         viewport.setScrollBarsShown (false, true);
@@ -530,6 +981,7 @@ public:
         addAndMakeVisible (viewport);
 
         strip.addCard.onClick = [this] { showAddMenu(); };
+        strip.onOrderChanged = [this] (const std::vector<int>& visible) { applyVisibleOrder (visible); };
 
         addButton.setButtonText ("+  ADD PEDAL");
         addButton.onClick = [this] { showAddMenu(); };
@@ -542,7 +994,7 @@ public:
     /** Called from the UI timer: reflects automation / state changes and keeps the status text current. */
     void refresh()
     {
-        if (currentMask() != shownMask)
+        if (! strip.isDragging() && (currentMask() != shownMask || processor.getChainOrder() != shownOrder))
         {
             rebuild();
             return;
@@ -565,6 +1017,28 @@ public:
         strip.layoutItems (b.getHeight());
     }
 
+    ChainStrip& getStrip() { return strip; }
+
+    /** Opens the add-pedal popover below the "+ ADD PEDAL" button. */
+    void showAddMenu()
+    {
+        auto* parent = getParentComponent();
+        if (parent == nullptr || ! addButton.isEnabled())
+            return;
+
+        auto menu = std::make_unique<AddPedalMenu> (apvts);
+        menu->onPick = [safe = juce::Component::SafePointer<SignalChainPanel> (this)] (const PedalCatalog::Pedal& info)
+        {
+            if (safe != nullptr)
+                safe->addPedal (info);
+        };
+
+        auto& box = juce::CallOutBox::launchAsynchronously (std::move (menu),
+                                                            parent->getLocalArea (&addButton, addButton.getLocalBounds()),
+                                                            parent);
+        box.setArrowSize (10.0f);
+    }
+
 private:
     int currentMask() const
     {
@@ -577,6 +1051,7 @@ private:
     void rebuild()
     {
         shownMask = currentMask();
+        shownOrder = processor.getChainOrder();
         strip.rebuild();
 
         for (auto* p : strip.pedals)
@@ -621,41 +1096,41 @@ private:
         }
     }
 
-    void showAddMenu()
+    void addPedal (const PedalCatalog::Pedal& info)
     {
-        juce::PopupMenu menu;
-        menu.addSectionHeader ("INSERT PEDAL");
+        setAdded (info, true);
+        rebuild();
 
-        const auto& all = PedalCatalog::all();
-        for (int i = 0; i < (int) all.size(); ++i)
-        {
-            const auto& info = all[(size_t) i];
-            if (! ChainStrip::isInChain (apvts, info))
-                menu.addItem (i + 1, juce::String (info.name) + "   -   " + (info.postAmp ? "after amp" : "before amp"));
-        }
-
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addButton),
-                            [safe = juce::Component::SafePointer<SignalChainPanel> (this)] (int result)
-        {
-            if (safe == nullptr || result <= 0)
-                return;
-
-            const auto& info = PedalCatalog::all()[(size_t) (result - 1)];
-            safe->setAdded (info, true);
-            safe->rebuild();
-
-            // bring the new pedal into view
-            for (auto* p : safe->strip.pedals)
-                if (&p->getInfo() == &info)
-                    safe->viewport.setViewPosition (juce::jmax (0, p->getRight() - safe->viewport.getMaximumVisibleWidth() + 40), 0);
-        });
+        // bring the new pedal into view
+        for (auto* p : strip.pedals)
+            if (&p->getInfo() == &info)
+                viewport.setViewPosition (juce::jmax (0, p->getRight() - viewport.getMaximumVisibleWidth() + 40), 0);
     }
 
+    /** The strip only knows the items that are on screen. Pedals that are not in the chain keep
+        their slot in the processor's order; the visible items are poured into the slots that the
+        visible items used to occupy. */
+    void applyVisibleOrder (const std::vector<int>& visible)
+    {
+        auto full = processor.getChainOrder();
+        auto isVisible = [&] (int id) { return std::find (visible.begin(), visible.end(), id) != visible.end(); };
+
+        size_t next = 0;
+        for (auto& slot : full)
+            if (isVisible (slot))
+                slot = visible[next++];
+
+        processor.setChainOrder (full);
+        shownOrder = processor.getChainOrder();
+    }
+
+    NeuralFlowAmpAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
     ChainStrip strip;
     juce::Viewport viewport;
     juce::TextButton addButton;
     int shownMask = 0;
+    PedalCatalog::ChainOrder shownOrder {};
 };
 
 //==============================================================================

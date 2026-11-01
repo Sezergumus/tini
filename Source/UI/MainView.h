@@ -12,7 +12,7 @@ public:
     explicit MainView (NeuralFlowAmpAudioProcessor& p)
         : processor (p),
           inputMeter ("INPUT"), outputMeter ("OUTPUT"),
-          lead (p.apvts), chain (p.apvts), cabPanel (p)
+          lead (p.apvts), chain (p), cabPanel (p)
     {
         setLookAndFeel (&laf);
 

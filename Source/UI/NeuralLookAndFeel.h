@@ -25,7 +25,24 @@ public:
     }
 
     //==========================================================================
-    void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height,
+    // Call-out bubbles (the add-pedal popover): graphite card, thin border, soft shadow, arrow.
+    void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g, const juce::Path& path, juce::Image&) override
+    {
+        juce::DropShadow (juce::Colours::black.withAlpha (0.55f), 20, { 0, 6 }).drawForPath (g, path);
+
+        const auto bounds = path.getBounds();
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff20252b), 0.0f, bounds.getY(),
+                                                 juce::Colour (0xff15181c), 0.0f, bounds.getBottom(), false));
+        g.fillPath (path);
+
+        g.setColour (juce::Colour (0xff3a424b));
+        g.strokePath (path, juce::PathStrokeType (1.0f));
+    }
+
+    int getCallOutBoxBorderSize (const juce::CallOutBox&) override { return 16; }
+
+    //==========================================================================
+    void drawScrollbar(juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height,
                         bool isVertical, int thumbStart, int thumbSize, bool over, bool down) override
     {
         auto track = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height);
