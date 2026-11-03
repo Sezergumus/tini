@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tını - guitar amp simulator with Neural Amp Modeler support</title>
+  <meta name="description" content="Free, open-source guitar amp simulator for Windows. Standalone app and VST3 plugin with Neural Amp Modeler (.nam) support, cabinet IRs and a reorderable pedal chain.">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <img class="wordmark" src="assets/wordmark.svg" alt="tını" height="28">
+  <nav>
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/Sezergumus/tini">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+  <section class="hero">
+    <h1>A free guitar amp for your PC.</h1>
+    <p class="lead">Neural Amp Modeler captures, cabinet IRs and a pedal board you can rearrange.
+       Runs on its own or as a VST3 plugin in your DAW.</p>
+    <p class="cta">
+      <a class="button" href="https://github.com/Sezergumus/tini/releases/latest">Download for Windows</a>
+      <a class="button ghost" href="https://github.com/Sezergumus/tini">View source</a>
+    </p>
+    <p class="small">Windows 10/11, 64-bit. Free and open source (AGPL-3.0).</p>
+
+    <!-- TODO: main screenshot. Put the file at site/screenshots/main.png -->
+    <figure class="shot">
+      <img src="screenshots/main.png" alt="tını main window" onerror="this.parentNode.classList.add('missing')">
+      <figcaption>Screenshot: main window</figcaption>
+    </figure>
+  </section>
+
+  <section id="features">
+    <h2>What it does</h2>
+    <ul class="cards">
+      <li><h3>Neural Amp Modeler</h3><p>Load <code>.nam</code> captures for the amp slot, or as pedals. Each pedal is named after its model.</p></li>
+      <li><h3>Cabinet IRs</h3><p>Drop in your own impulse responses for the cabinet.</p></li>
+      <li><h3>Pedal board</h3><p>Noise gate, compressor, boost, overdrive, chorus, delay, reverb. Drag to reorder the chain.</p></li>
+      <li><h3>Library</h3><p>Your models, pedals and IRs in one place, filtered by make, model, tone and type. Drop files or zips on the window to add them.</p></li>
+      <li><h3>Presets and tuner</h3><p>Save and load presets. Built-in tuner.</p></li>
+      <li><h3>Low latency</h3><p>ASIO support, and the standalone shows the real round-trip latency of your audio device.</p></li>
+    </ul>
+
+    <!-- TODO: more screenshots (library, pedal page, cabinet). Files go in site/screenshots/ -->
+    <div class="shots">
+      <figure class="shot"><img src="screenshots/library.png" alt="Library page" onerror="this.parentNode.classList.add('missing')"><figcaption>Screenshot: Library</figcaption></figure>
+      <figure class="shot"><img src="screenshots/pedal.png" alt="A pedal page" onerror="this.parentNode.classList.add('missing')"><figcaption>Screenshot: pedal page</figcaption></figure>
+      <figure class="shot"><img src="screenshots/cab.png" alt="Cabinet page" onerror="this.parentNode.classList.add('missing')"><figcaption>Screenshot: cabinet</figcaption></figure>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <ol>
+      <li>Download the latest release from the <a href="https://github.com/Sezergumus/tini/releases/latest">Releases page</a>.</li>
+      <li>Standalone: unpack and run <code>Tini.exe</code>. Pick your audio device in Settings.<br>
+          Plugin: copy <code>Tini.vst3</code> to <code>C:\Program Files\Common Files\VST3</code> and rescan plugins in your DAW (Reaper, Ableton Live 10.1+ and other VST3 hosts).</li>
+      <li>Add some models: tını does not ship with any. Browse <a href="https://www.tone3000.com">TONE3000</a> for free <code>.nam</code> captures and IRs, then drop them on the window.</li>
+    </ol>
+
+    <div class="note">
+      <h3>Windows says "Windows protected your PC"?</h3>
+      <p>tını is a hobby project and the download is not code-signed, so SmartScreen warns about it.
+         Click <strong>More info</strong>, then <strong>Run anyway</strong>. The source is public, you can build it yourself.</p>
+    </div>
+
+    <h3>Low latency tip</h3>
+    <p>For the lowest delay use an ASIO driver (your audio interface's own, or
+       <a href="https://github.com/dechamps/FlexASIO">FlexASIO</a> / ASIO4ALL) and set the buffer to 256 samples or less.</p>
+  </section>
+
+  <section id="about">
+    <h2>About</h2>
+    <p>tını is free software under the <a href="https://github.com/Sezergumus/tini/blob/main/LICENSE">GNU AGPL v3</a>.
+       Built with <a href="https://juce.com">JUCE</a> and
+       <a href="https://github.com/sdatkinson/NeuralAmpModelerCore">NeuralAmpModelerCore</a>.
+       Bugs and ideas: <a href="https://github.com/Sezergumus/tini/issues">GitHub Issues</a>.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>&copy; 2026 Sezer Gümüş. VST is a trademark of Steinberg Media Technologies GmbH.</p>
+</footer>
+
+</body>
+</html>
