@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Tini VERSION 1.0.0)
+project(Tini VERSION 0.1.0)
 
 # JUCE library is automatically downloaded from GitHub
 include(FetchContent)
