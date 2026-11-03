@@ -52,10 +52,6 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    static constexpr int scopeSize = 512;
-    std::array<float, scopeSize> scopeData;
-    std::atomic<bool> isNextFrameReady{ false };
-
     // Block peaks (linear gain) for the UI meters. The UI reads them with exchange(0).
     std::atomic<float> inputPeak{ 0.0f };
     std::atomic<float> outputPeak{ 0.0f };
@@ -161,8 +157,6 @@ private:
     std::array<juce::dsp::Chorus<float>, copies> chorus;
     std::array<StereoDelay, copies> delayFx;
     std::array<juce::dsp::Reverb, copies> reverb;
-    
-    int scopeDataIndex = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeuralFlowAmpAudioProcessor)
 };
