@@ -58,6 +58,10 @@ public:
 
     void loadImpulseResponse(const juce::File& file);
 
+    /** Reference pitch of the tuner (A4, 415..466 Hz). A setting of the session, not part of a preset. */
+    float getTunerReferenceHz() const { return tunerReferenceHz.load(); }
+    void setTunerReferenceHz(float hz) { tunerReferenceHz.store(juce::jlimit(415.0f, 466.0f, hz)); }
+
     /** Order of the pedals and the amp in the signal chain (item numbers, see PedalCatalog).
         Safe to call from the UI while audio is running. Items whose "added" switch is off are
         parked in the order and not processed. */
@@ -126,6 +130,8 @@ private:
     std::atomic<float>* namInParam = nullptr;
     std::atomic<float>* namOutParam = nullptr;
     std::atomic<float>* namNormParam = nullptr;
+
+    std::atomic<float> tunerReferenceHz{ 440.0f };
 
     juce::String currentPresetName; // empty = untitled
     int currentProgram = 0;         // factory preset last reported to the host

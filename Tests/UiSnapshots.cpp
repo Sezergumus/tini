@@ -710,6 +710,109 @@ void renderUiSnapshots (const juce::File& dir)
         report (false, "the editor has a preset bar");
     }
 
+    //==========================================================================
+    // Settings page: opened by the gear, closed by the gear or a block.
+    if (auto* view = findFirst<MainView> (*editor))
+    {
+        auto& blocks2 = view->getBlocks();
+        report (! view->getMinimiseButton().isVisible() && ! view->getCloseButton().isVisible(),
+                "no window buttons without a standalone window (plugin in a DAW)");
+        report (blocks2.getOverlayKind() == BlockEditor::Overlay::none, "no overlay page at first");
+
+        view->getGearButton().triggerClick();
+        settleLoop (100);
+        auto* settings = dynamic_cast<SettingsPage*> (blocks2.getOverlay());
+        report (settings != nullptr && blocks2.getOverlayKind() == BlockEditor::Overlay::settings, "the gear opens the Settings page");
+        report (view->getGearButton().getToggleState(), "...and the gear stays lit");
+        report (! blocks2.getAmpPage().isVisible(), "...and the block page steps aside");
+        report (settings != nullptr && ! settings->hasAudioSelector(), "inside a plugin the host owns the audio device: no device selector");
+        save (*editor, dir.getChildFile ("ui_settings_plugin.png"));
+
+        if (settings != nullptr)
+        {
+            settings->getReferenceSlider().setValue (432.0, juce::sendNotificationSync);
+            report (std::abs (p.getTunerReferenceHz() - 432.0f) < 0.01f, "the reference pitch slider sets the tuner's A4");
+
+            juce::MemoryBlock state;
+            p.getStateInformation (state);
+            p.setTunerReferenceHz (440.0f);
+            p.setStateInformation (state.getData(), (int) state.getSize());
+            report (std::abs (p.getTunerReferenceHz() - 432.0f) < 0.01f, "...and it is saved with the session");
+            p.setTunerReferenceHz (440.0f);
+        }
+
+        view->getGearButton().triggerClick();
+        settleLoop (100);
+        report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && blocks2.getAmpPage().isVisible(), "the gear closes the Settings page again");
+
+        view->getGearButton().triggerClick();
+        settleLoop (100);
+        view->getChain().select (PedalCatalog::ampItem);
+        settleLoop (100);
+        report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && blocks2.getAmpPage().isVisible(), "clicking a block closes the Settings page");
+    }
+    else
+    {
+        report (false, "the editor has a main view");
+    }
+
     editor.reset();
+
+    // The standalone window: its hooks add the window buttons and the audio device selector.
+    {
+        int minimised = 0, toggled = 0, closed = 0;
+        juce::AudioDeviceManager deviceManager;
+
+        auto& hooks = StandaloneHooks::controller();
+        hooks.minimise       = [&] { ++minimised; };
+        hooks.toggleMaximise = [&] { ++toggled; };
+        hooks.close          = [&] { ++closed; };
+        hooks.isMaximised    = [&] { return toggled % 2 == 1; };
+        hooks.deviceManager  = [&] { return &deviceManager; };
+
+        std::unique_ptr<juce::AudioProcessorEditor> standalone (p.createEditor());
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+
+        if (auto* view = findFirst<MainView> (*standalone))
+        {
+            report (view->getMinimiseButton().isVisible() && view->getMaximiseButton().isVisible() && view->getCloseButton().isVisible(),
+                    "the standalone header has minimise, fit and close buttons");
+            report (view->getMinimiseButton().getX() < view->getMaximiseButton().getX()
+                        && view->getMaximiseButton().getX() < view->getCloseButton().getX()
+                        && view->getCloseButton().getRight() <= Theme::designWidth,
+                    "...in that order at the right end");
+            report (view->getGearButton().getRight() < view->getMinimiseButton().getX(), "...with the gear to their left");
+
+            view->getMinimiseButton().triggerClick();
+            view->getMaximiseButton().triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            report (minimised == 1 && toggled == 1 && closed == 0, "minimise and fit call the window");
+            view->getCloseButton().triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            report (closed == 1, "close asks the application to quit");
+
+            // double click on the empty header fits the window
+            const auto source = juce::Desktop::getInstance().getMainMouseSource();
+            const auto now = juce::Time::getCurrentTime();
+            const juce::Point<float> pos (200.0f, 20.0f);
+            juce::MouseEvent e (source, pos, juce::ModifierKeys(), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, view, view, now, pos, now, 2, false);
+            view->mouseDoubleClick (e);
+            report (toggled == 2, "a double click on the header fits the window");
+
+            view->getGearButton().triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+            auto* settings = dynamic_cast<SettingsPage*> (view->getBlocks().getOverlay());
+            report (settings != nullptr && settings->hasAudioSelector(), "the standalone Settings page has the audio device selector");
+            save (*standalone, dir.getChildFile ("ui_settings_standalone.png"));
+        }
+        else
+        {
+            report (false, "the standalone editor has a main view");
+        }
+
+        standalone.reset();
+        hooks = {};
+    }
+
     presetFolder.deleteRecursively();
 }

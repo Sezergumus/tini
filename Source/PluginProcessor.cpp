@@ -508,6 +508,7 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
     state.setProperty("namPath", nam.getFile().getFullPathName(), nullptr);
     state.setProperty("chain", PedalCatalog::orderToString(getChainOrder()), nullptr);
     state.setProperty("presetName", currentPresetName, nullptr);
+    state.setProperty("tunerRef", getTunerReferenceHz(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
@@ -530,6 +531,8 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
     else if (state.hasProperty("chainOrder"))   // sessions saved by version 1
         PedalCatalog::orderFromLegacy((juce::uint32)(int) state.getProperty("chainOrder"), order);
     setChainOrder(order);
+
+    setTunerReferenceHz(state.hasProperty("tunerRef") ? (float) (double) state.getProperty("tunerRef") : 440.0f);
 
     // Which preset the session was based on (the values above stay as saved, edits included)
     currentPresetName = state.getProperty("presetName").toString();

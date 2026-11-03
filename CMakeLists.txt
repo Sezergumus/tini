@@ -92,15 +92,22 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/UI/Widgets.h
     Source/UI/Panels.h
     Source/UI/Footer.h
+    Source/UI/HeaderButtons.h
+    Source/UI/SettingsPage.h
+    Source/StandaloneHooks.h
     Source/UI/MainView.h
     Source/UI/BlockPages.h
     Source/UI/PresetBar.h
     Source/UI/PresetList.h
 )
 
-# Standalone-only helper that reports the real audio device latency to the UI.
-# (JucePlugin_Build_Standalone is only defined on the format target, hence the separate file.)
-target_sources(NeuralFlowAmp_Standalone PRIVATE Source/StandaloneBridge.cpp)
+# Standalone-only helpers (JucePlugin_Build_Standalone is only defined on the format target, hence the
+# separate files): StandaloneBridge reports the real audio device latency to the UI, StandaloneApp is the
+# application with a window that has no title bar (the header of the UI is the title bar; see the file).
+target_sources(NeuralFlowAmp_Standalone PRIVATE
+    Source/StandaloneBridge.cpp
+    Source/StandaloneApp.cpp)
+target_compile_definitions(NeuralFlowAmp_Standalone PRIVATE JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
 
 # Optional ASIO audio driver support (lowest latency on Windows).
 # Steinberg's ASIO SDK is not bundled here (you accept its licence when you get it from

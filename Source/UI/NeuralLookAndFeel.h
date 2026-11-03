@@ -23,6 +23,12 @@ public:
         setColour (juce::TextEditor::focusedOutlineColourId, Theme::accent);
         setColour (juce::CaretComponent::caretColourId,    Theme::accent);
 
+        setColour (juce::ComboBox::backgroundColourId,     Theme::inset);
+        setColour (juce::ComboBox::textColourId,           Theme::textHi);
+        setColour (juce::ComboBox::outlineColourId,        Theme::panelBorder);
+        setColour (juce::ComboBox::arrowColourId,          Theme::textMid);
+        setColour (juce::ComboBox::focusedOutlineColourId, Theme::accent);
+
         setColour (juce::PopupMenu::backgroundColourId,            Theme::surface);
         setColour (juce::PopupMenu::textColourId,                  Theme::textHi);
         setColour (juce::PopupMenu::headerTextColourId,            Theme::textLo);

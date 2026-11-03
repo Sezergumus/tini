@@ -503,11 +503,14 @@ private:
 };
 
 //==============================================================================
-/** The big area below the chain strip: shows the page of the selected block. The selection is a
-    setting of the editor, not part of a preset. */
+/** The big area below the chain strip: shows the page of the selected block, or a page that takes
+    its place (the Settings page, the tuner) until a block is clicked. The selection is a setting of
+    the editor, not part of a preset. */
 class BlockEditor : public juce::Component
 {
 public:
+    enum class Overlay { none, settings, tuner };
+
     explicit BlockEditor (NeuralFlowAmpAudioProcessor& p)
         : processor (p), ampPage (p), cabPage (p)
     {
@@ -519,6 +522,8 @@ public:
     /** Opens the page of a block: a pedal item, PedalCatalog::ampItem or cabBlock. */
     void show (int block)
     {
+        closeOverlay();
+
         shown = block;
         pedalPage.reset();
 
@@ -529,11 +534,48 @@ public:
             addAndMakeVisible (*pedalPage);
         }
 
-        ampPage.setVisible (block == PedalCatalog::ampItem);
-        cabPage.setVisible (block == cabBlock);
+        updatePages();
         resized();
         repaint();
     }
+
+    /** Puts `page` in place of the block page. A block click (show) or closeOverlay() brings it back. */
+    void showOverlay (std::unique_ptr<juce::Component> page, Overlay kind)
+    {
+        closeOverlay (false);
+
+        overlay = std::move (page);
+        overlayKind = kind;
+        addAndMakeVisible (*overlay);
+
+        updatePages();
+        resized();
+        repaint();
+        notifyOverlay();
+    }
+
+    void closeOverlay (bool notify = true)
+    {
+        if (overlay == nullptr)
+            return;
+
+        removeChildComponent (overlay.get());
+        overlay.reset();
+        overlayKind = Overlay::none;
+
+        updatePages();
+        resized();
+        repaint();
+
+        if (notify)
+            notifyOverlay();
+    }
+
+    Overlay getOverlayKind() const { return overlayKind; }
+    juce::Component* getOverlay() { return overlay.get(); }
+
+    /** Called whenever an overlay page opened or closed. */
+    std::function<void()> onOverlayChanged;
 
     int getShownBlock() const { return shown; }
 
@@ -557,6 +599,8 @@ public:
         cabPage.setBounds (inner);
         if (pedalPage != nullptr)
             pedalPage->setBounds (inner);
+        if (overlay != nullptr)
+            overlay->setBounds (inner);
     }
 
     AmpPage& getAmpPage() { return ampPage; }
@@ -564,9 +608,26 @@ public:
     PedalPage* getPedalPage() { return pedalPage.get(); }
 
 private:
+    void updatePages()
+    {
+        const bool pagesVisible = overlay == nullptr;
+        ampPage.setVisible (pagesVisible && shown == PedalCatalog::ampItem);
+        cabPage.setVisible (pagesVisible && shown == cabBlock);
+        if (pedalPage != nullptr)
+            pedalPage->setVisible (pagesVisible);
+    }
+
+    void notifyOverlay()
+    {
+        if (onOverlayChanged)
+            onOverlayChanged();
+    }
+
     NeuralFlowAmpAudioProcessor& processor;
     AmpPage ampPage;
     CabPage cabPage;
     std::unique_ptr<PedalPage> pedalPage;
+    std::unique_ptr<juce::Component> overlay;
+    Overlay overlayKind = Overlay::none;
     int shown = PedalCatalog::ampItem;
 };
