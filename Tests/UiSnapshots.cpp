@@ -875,7 +875,7 @@ void renderUiSnapshots (const juce::File& dir)
     }
 
     //==========================================================================
-    // Library: Documents/tini/{Amps,Pedals,IRs} is watched live, files can be added, renamed and deleted
+    // Library: Documents/tini/{Amps,Pedals,Cabs,Other} is watched live, files can be added, renamed and deleted
     // from the list, and files dropped on the window are copied in and loaded.
     if (auto* view = findFirst<MainView> (*editor))
     {
@@ -904,8 +904,8 @@ void renderUiSnapshots (const juce::File& dir)
 
             const auto amps = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
             report (amps.isDirectory() && FileLibrary::libraryFolder (FileLibrary::Kind::pedals).isDirectory()
-                        && FileLibrary::libraryFolder (FileLibrary::Kind::irs).isDirectory(),
-                    "showing a list creates the Amps, Pedals and IRs folders");
+                        && FileLibrary::libraryFolder (FileLibrary::Kind::cabs).isDirectory(),
+                    "showing a list creates the Amps, Pedals, Cabs and Other folders");
             report (list.getFolder() == amps && list.getNumFiles() == 0, "an empty library shows an empty list");
 
             testModels.getChildFile ("test_wavenet.nam").copyFileTo (amps.getChildFile ("One.nam"));
@@ -1013,7 +1013,7 @@ void renderUiSnapshots (const juce::File& dir)
 
             FileLibrary::Kind kind;
             report (FileLibrary::kindOfFile (juce::File ("x.NAM"), kind) && kind == FileLibrary::Kind::amps, ".nam belongs to the amp library");
-            report (FileLibrary::kindOfFile (juce::File ("x.wav"), kind) && kind == FileLibrary::Kind::irs, ".wav belongs to the IR library");
+            report (FileLibrary::kindOfFile (juce::File ("x.wav"), kind) && kind == FileLibrary::Kind::cabs, ".wav belongs to the IR library");
             report (! FileLibrary::kindOfFile (juce::File ("x.png"), kind), "other files belong nowhere");
         }
 
@@ -1051,9 +1051,9 @@ void renderUiSnapshots (const juce::File& dir)
             settleLoop (200);
 
             const auto ampsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
-            const auto irsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::irs);
+            const auto irsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::cabs);
             report (ampsFolder.getChildFile ("Dropped Amp.nam").existsAsFile() && irsFolder.getChildFile ("Dropped Cab.wav").existsAsFile(),
-                    "dropped files are copied into Amps and IRs");
+                    "dropped files are copied into Amps and Cabs");
             report (p.nam.getFile() == ampsFolder.getChildFile ("Dropped Amp.nam") && p.nam.hasModel(), "the dropped model is loaded from the library");
             report (p.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f, "...and the amp switches to NAM");
             report (p.loadedIrFile == irsFolder.getChildFile ("Dropped Cab.wav"), "the dropped impulse response is loaded into the cab");

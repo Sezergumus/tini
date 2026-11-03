@@ -1,19 +1,23 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "NamMetadata.h"
 
 //==============================================================================
-/** The local library: three folders under Documents/tini that tını watches and the user can fill
+/** The local library: four folders under Documents/tini that tını watches and the user can fill
     from Explorer or from inside the app.
 
-        Amps     NAM captures of whole amps (the amp slot)
-        Pedals   NAM captures of pedals (the Capture pedal)
-        IRs      cabinet impulse responses
+        Amps     NAM captures of amps and pre-amps (the amp slot)
+        Pedals   NAM captures of pedals (each one becomes a pedal of its own)
+        Cabs     cabinet impulse responses
+        Other    NAM captures of anything else (amp + cab, studio chains, ...)
 
     Nothing here touches the UI or the audio thread. */
 namespace FileLibrary
 {
-    enum class Kind { amps, pedals, irs };
+    enum class Kind { amps, pedals, cabs, other };
+
+    inline constexpr Kind allKinds[] = { Kind::amps, Kind::pedals, Kind::cabs, Kind::other };
 
     inline const juce::String modelWildcard = "*.nam";
     inline const juce::String irWildcard    = "*.wav;*.aif;*.aiff;*.flac";
@@ -47,7 +51,7 @@ namespace FileLibrary
         return downloads.isDirectory() ? downloads : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
     }
 
-    inline bool isModelKind (Kind kind)                 { return kind != Kind::irs; }
+    inline bool isModelKind (Kind kind)                 { return kind != Kind::cabs; }
 
     /** True if `file` is one of the files `kind` can hold (by extension). */
     inline bool fits (const juce::File& file, Kind kind)
@@ -63,7 +67,8 @@ namespace FileLibrary
         {
             case Kind::amps:   return "Amps";
             case Kind::pedals: return "Pedals";
-            case Kind::irs:    return "IRs";
+            case Kind::cabs:   return "Cabs";
+            case Kind::other:  return "Other";
         }
         return {};
     }
@@ -75,55 +80,83 @@ namespace FileLibrary
         {
             case Kind::amps:   return "Amp models";
             case Kind::pedals: return "Pedal models";
-            case Kind::irs:    return "Impulse responses";
+            case Kind::cabs:   return "Cabinet IRs";
+            case Kind::other:  return "Other models";
         }
         return {};
     }
 
     inline juce::File libraryFolder (Kind kind) { return root().getChildFile (folderName (kind)); }
 
-    /** Creates the three folders. Older versions kept amp models in "Models": that folder is renamed to
-        "Amps" once (only if "Amps" does not exist yet). */
+    /** Creates the library folders. Older versions used other names: "Models" is renamed to "Amps" and
+        "IRs" to "Cabs", once (only if the new folder does not exist yet). */
     inline void ensureFolders()
     {
-        const auto legacy = root().getChildFile ("Models");
-        const auto amps = libraryFolder (Kind::amps);
+        const std::pair<const char*, Kind> renamed[] = { { "Models", Kind::amps }, { "IRs", Kind::cabs } };
 
-        if (legacy.isDirectory() && ! amps.exists())
-            legacy.moveFileTo (amps);
+        for (const auto& [oldName, kind] : renamed)
+        {
+            const auto legacy = root().getChildFile (oldName);
+            const auto target = libraryFolder (kind);
 
-        for (auto kind : { Kind::amps, Kind::pedals, Kind::irs })
+            if (legacy.isDirectory() && ! target.exists())
+                legacy.moveFileTo (target);
+        }
+
+        for (auto kind : allKinds)
             libraryFolder (kind).createDirectory();
     }
 
-    /** A path saved by an older version may point into the old "Models" folder: follow it to "Amps". */
+    /** A path saved by an older version may point into a renamed folder ("Models" -> "Amps", "IRs" ->
+        "Cabs"): follow it. */
     inline juce::File resolveSaved (const juce::File& saved)
     {
         if (saved.existsAsFile() || saved == juce::File())
             return saved;
 
-        if (saved.getParentDirectory() == root().getChildFile ("Models"))
+        const std::pair<const char*, Kind> renamed[] = { { "Models", Kind::amps }, { "IRs", Kind::cabs } };
+
+        for (const auto& [oldName, kind] : renamed)
         {
-            const auto moved = libraryFolder (Kind::amps).getChildFile (saved.getFileName());
-            if (moved.existsAsFile())
-                return moved;
+            if (saved.getParentDirectory() == root().getChildFile (oldName))
+            {
+                const auto moved = libraryFolder (kind).getChildFile (saved.getFileName());
+                if (moved.existsAsFile())
+                    return moved;
+            }
         }
 
         return saved;
     }
 
-    /** Which library a file belongs in by its extension; false for anything tini cannot use. */
-    inline bool kindOfFile (const juce::File& file, Kind& kind)
+    /** The library kind of a NAM gear type; false if the type is empty (the caller picks a default). */
+    inline bool kindOfGearType (const juce::String& gearType, Kind& kind)
+    {
+        switch (NamMetadata::sectionFor (gearType))
+        {
+            case NamMetadata::Section::amps:    kind = Kind::amps;   return true;
+            case NamMetadata::Section::pedals:  kind = Kind::pedals; return true;
+            case NamMetadata::Section::other:   kind = Kind::other;  return true;
+            case NamMetadata::Section::none:    break;
+        }
+        return false;
+    }
+
+    /** Which library a file belongs in; false for anything tını cannot use. An audio file is a cab IR.
+        A .nam file goes where its metadata says (amp / pre-amp: Amps, pedal: Pedals, anything else:
+        Other); without metadata it goes to `namDefault`. */
+    inline bool kindOfFile (const juce::File& file, Kind& kind, Kind namDefault = Kind::amps)
     {
         if (file.hasFileExtension ("nam"))
         {
-            kind = Kind::amps;
+            kind = namDefault;
+            kindOfGearType (NamMetadata::read (file).gearType, kind);
             return true;
         }
 
         if (file.hasFileExtension ("wav;aif;aiff;flac"))
         {
-            kind = Kind::irs;
+            kind = Kind::cabs;
             return true;
         }
 

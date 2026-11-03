@@ -1,5 +1,6 @@
 // Minimal headless checks for the audio engine. Exit code 0 = all passed.
 #include "../Source/PluginProcessor.h"
+#include "../Source/LibraryPaths.h"
 #include "NAM/get_dsp.h"
 
 namespace
@@ -1071,6 +1072,83 @@ namespace
         return p.pedalNam[(size_t) copy].getStatus().state == NamEngine::Status::State::ready;
     }
 
+    void testNamMetadata()
+    {
+        std::printf ("\n-- NAM metadata and library sections --\n");
+
+        const auto models = juce::File (__FILE__).getParentDirectory().getChildFile ("models");
+
+        const auto wave = NamMetadata::read (models.getChildFile ("test_wavenet.nam"));
+        check (wave.found && wave.gearType == "amp" && wave.make == "Darkglass Electronics"
+                   && wave.model == "Microtubes 900 v2" && wave.toneType == "clean" && wave.name == "Test Model",
+               "the metadata of a model file is read (" + wave.gearType + ", " + wave.gearLine() + ")");
+        check (wave.detailLine().endsWith ("clean"), "...and the detail line ends with the tone type: " + wave.detailLine());
+
+        // a container model keeps its metadata inside the first submodel
+        const auto a2 = NamMetadata::read (models.getChildFile ("test_a2.nam"));
+        check (a2.found, "metadata nested in a container model is found");
+
+        // text parsing: braces and quotes inside strings do not confuse the matcher
+        const auto tricky = NamMetadata::parse (R"({"version":"0.5.4","metadata":{"name":"a } \" { b","gear_type":"Pedal","tone_type":"hi_gain","x":{"y":1}},"weights":[1,2,3]})");
+        check (tricky.found && tricky.name == "a } \" { b" && tricky.gearType == "pedal" && tricky.toneType == "hi_gain",
+               "braces and escaped quotes inside strings are handled");
+        check (tricky.detailLine() == "hi gain", "an underscore in the tone type reads as a space");
+        check (! NamMetadata::parse ("{\"version\":\"1\",\"weights\":[0]}").found, "a file without metadata reports none");
+        check (! NamMetadata::parse ("{\"metadata\":{\"name\":\"cut off").found, "a cut off metadata object reports none");
+        check (! NamMetadata::read (models.getChildFile ("missing.nam")).found, "a missing file reports none");
+
+        // gear type -> library section
+        using Kind = FileLibrary::Kind;
+        auto kindOf = [] (const char* gear, Kind fallback)
+        {
+            Kind k = fallback;
+            FileLibrary::kindOfGearType (gear, k);
+            return k;
+        };
+        check (kindOf ("amp", Kind::other) == Kind::amps && kindOf ("preamp", Kind::other) == Kind::amps, "amp and preamp go to Amps");
+        check (kindOf ("pedal", Kind::amps) == Kind::pedals, "a pedal goes to Pedals");
+        check (kindOf ("amp_cab", Kind::amps) == Kind::other && kindOf ("amp_pedal_cab", Kind::amps) == Kind::other
+                   && kindOf ("pedal_amp", Kind::amps) == Kind::other && kindOf ("studio", Kind::amps) == Kind::other,
+               "everything else goes to Other");
+        check (kindOf ("", Kind::pedals) == Kind::pedals, "no gear type keeps the caller's default");
+
+        Kind k;
+        check (FileLibrary::kindOfFile (models.getChildFile ("test_wavenet.nam"), k) && k == Kind::amps, "an amp model file is sorted into Amps");
+        check (FileLibrary::kindOfFile (models.getChildFile ("missing.nam"), k, Kind::pedals) && k == Kind::pedals,
+               "a model file without metadata goes to the default folder");
+        check (FileLibrary::kindOfFile (juce::File ("x.wav"), k) && k == Kind::cabs && ! FileLibrary::kindOfFile (juce::File ("x.png"), k),
+               "audio is a cab IR, other files are refused");
+
+        // the old IRs folder becomes Cabs once
+        const auto saved = FileLibrary::rootOverride();
+        const auto temp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("tini_meta_test");
+        temp.deleteRecursively();
+        FileLibrary::rootOverride() = temp;
+        temp.getChildFile ("IRs").createDirectory();
+        temp.getChildFile ("IRs").getChildFile ("Old.wav").replaceWithText ("x");
+        FileLibrary::ensureFolders();
+        check (! temp.getChildFile ("IRs").exists() && temp.getChildFile ("Cabs").getChildFile ("Old.wav").existsAsFile(),
+               "an older IRs folder becomes Cabs");
+        check (FileLibrary::resolveSaved (temp.getChildFile ("IRs").getChildFile ("Old.wav")) == temp.getChildFile ("Cabs").getChildFile ("Old.wav"),
+               "...and a saved IR path follows it");
+        check (temp.getChildFile ("Amps").isDirectory() && temp.getChildFile ("Pedals").isDirectory() && temp.getChildFile ("Other").isDirectory(),
+               "all four library folders exist");
+
+        // the cache reads on a background thread
+        {
+            NamMetadata::Cache cache;
+            const auto file = models.getChildFile ("test_wavenet.nam");
+            check (! cache.get (file).found, "the cache answers at once with nothing for a new file");
+            for (int i = 0; i < 200 && ! cache.isIdle(); ++i)
+                juce::Thread::sleep (10);
+            check (cache.get (file).found && cache.get (file).gearType == "amp", "...and knows the file once the background read is done");
+            check (cache.getNow (models.getChildFile ("test_a2.nam")).found, "getNow reads on the calling thread");
+        }
+
+        FileLibrary::rootOverride() = saved;
+        temp.deleteRecursively();
+    }
+
     void testCapturePedal()
     {
         std::printf ("\n-- Capture pedal (NAM model of a pedal) --\n");
@@ -1468,6 +1546,7 @@ int main (int argc, char** argv)
     testTuner();
     testRigGain();
     testCapturePedal();
+    testNamMetadata();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

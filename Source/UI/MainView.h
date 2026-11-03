@@ -193,7 +193,10 @@ public:
             if (! imported.existsAsFile())
                 imported = file;   // the library could not be written: use the file where it is
 
-            auto& first = kind == FileLibrary::Kind::irs ? ir : model;
+            if (kind == FileLibrary::Kind::pedals)
+                continue;   // a pedal capture is kept in the library; it joins the chain from the pedal picker
+
+            auto& first = kind == FileLibrary::Kind::cabs ? ir : model;
             if (first == juce::File())
                 first = imported;
         }

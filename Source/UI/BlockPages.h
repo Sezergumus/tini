@@ -305,14 +305,14 @@ private:
     /** The impulse response before / after the loaded one in its folder. */
     void step (int delta)
     {
-        const auto file = FileLibrary::neighbour (processor.loadedIrFile, FileLibrary::Kind::irs, delta);
+        const auto file = FileLibrary::neighbour (processor.loadedIrFile, FileLibrary::Kind::cabs, delta);
         if (file.existsAsFile() && file != processor.loadedIrFile)
             loadFile (file);
     }
 
     void chooseFile()
     {
-        const auto library = FileLibrary::libraryFolder (FileLibrary::Kind::irs);
+        const auto library = FileLibrary::libraryFolder (FileLibrary::Kind::cabs);
         fileChooser = std::make_unique<juce::FileChooser> ("Select an impulse response (.wav)",
                                                            processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getParentDirectory()
                                                            : library.isDirectory() ? library
@@ -327,7 +327,7 @@ private:
             const auto picked = fc.getResult();
             if (safe != nullptr && picked.existsAsFile())
             {
-                const auto imported = FileLibrary::importFile (picked, FileLibrary::Kind::irs);
+                const auto imported = FileLibrary::importFile (picked, FileLibrary::Kind::cabs);
                 safe->loadFile (imported.existsAsFile() ? imported : picked);
             }
         });
@@ -764,7 +764,7 @@ public:
     }
 
     IrSlot irSlot;
-    FileBrowserList browser { FileLibrary::Kind::irs };
+    FileBrowserList browser { FileLibrary::Kind::cabs };
 
 private:
     NeuralFlowAmpAudioProcessor& processor;
