@@ -3,6 +3,7 @@
 #include "../PluginProcessor.h"
 #include "Panels.h"
 #include "ModelList.h"
+#include "FilterBar.h"
 #include "Theme.h"
 #include "Widgets.h"
 
@@ -82,7 +83,7 @@ public:
     using Kind = FileLibrary::Kind;
 
     explicit LibraryPage (NeuralFlowAmpAudioProcessor& p)
-        : processor (p), list (p, Kind::amps, "Load to amp")
+        : processor (p), list (p, Kind::amps, "Load to amp"), filterBar (list, true)
     {
         for (auto k : FileLibrary::allKinds)
         {
@@ -98,6 +99,7 @@ public:
         list.onDeleted = [this] (const juce::File&) { updateActions(); countFiles(); };
         list.onAdded = [this] (const juce::Array<juce::File>&) { countFiles(); };
         addAndMakeVisible (list);
+        addAndMakeVisible (filterBar);
 
         searchBox.setOpaque (false);   // rounded corners
         searchBox.setTextToShowWhenEmpty ("Search", Theme::textLo);
@@ -138,6 +140,7 @@ public:
 
     Kind getSection() const { return section; }
     ModelList& getList() { return list; }
+    FilterBar& getFilterBar() { return filterBar; }
     juce::TextEditor& getSearchBox() { return searchBox; }
     SectionButton& getSectionButton (Kind k) { return sectionFor (k); }
 
@@ -154,6 +157,7 @@ public:
 
         searchBox.setText ({}, false);
         list.setSearch ({});
+        list.clearFilters();
         list.setKind (kind);
         list.setPrimaryLabel (primaryLabel (kind));
         list.setEmptyText (emptyText (kind));
@@ -181,7 +185,11 @@ public:
         if (sig != shownUsage)
         {
             shownUsage = sig;
-            list.repaintRows();
+
+            if (list.getFilter().onlyInUse)
+                list.refilter();   // what is in use changed: so does the list
+            else
+                list.repaintRows();
         }
     }
 
@@ -258,6 +266,9 @@ public:
         head.removeFromRight (12);
         searchBox.setBounds (head.removeFromRight (juce::jmin (260, head.getWidth() - 200)).withSizeKeepingCentre (juce::jmin (260, head.getWidth() - 200), 30));
 
+        filterBar.setBounds (right.removeFromTop (FilterBar::height));
+        right.removeFromTop (4);
+
         auto strip = right.removeFromBottom (stripHeight);
         right.removeFromBottom (10);
         list.setBounds (right);
@@ -331,11 +342,7 @@ private:
         return {};
     }
 
-    static juce::String gearTypeLabel (const juce::String& gearType)
-    {
-        auto text = gearType.replaceCharacter ('_', ' ');
-        return text.substring (0, 1).toUpperCase() + text.substring (1);
-    }
+    static juce::String gearTypeLabel (const juce::String& gearType) { return LibraryFilter::prettify (gearType); }
 
     SectionButton& sectionFor (Kind k) { return *sections[(int) k]; }
 
@@ -443,6 +450,7 @@ private:
     Kind section = Kind::amps;
     juce::OwnedArray<SectionButton> sections;
     ModelList list;
+    FilterBar filterBar;
     juce::TextEditor searchBox;
     juce::TextButton addButton, folderButton, primaryButton, secondaryButton, renameButton, revealButton, deleteButton;
     std::unique_ptr<juce::FileChooser> fileChooser;

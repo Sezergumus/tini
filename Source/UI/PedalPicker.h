@@ -2,6 +2,7 @@
 
 #include "Panels.h"
 #include "ModelList.h"
+#include "FilterBar.h"
 
 //==============================================================================
 /** What the "+" button opens in the block area: every pedal that can join the chain, in two parts.
@@ -19,7 +20,7 @@ class PedalPicker : public juce::Component
 {
 public:
     explicit PedalPicker (NeuralFlowAmpAudioProcessor& p)
-        : processor (p), library (p, FileLibrary::Kind::pedals, "Add to chain")
+        : processor (p), library (p, FileLibrary::Kind::pedals, "Add to chain"), filterBar (library, false)
     {
         for (int type = 0; type < PedalCatalog::count; ++type)
         {
@@ -47,6 +48,7 @@ public:
         library.onPick = [this] (const juce::File& file) { pickFile (file); };
         library.isLoaded = [this] (const juce::File& file) { return inChain (file); };
         addAndMakeVisible (library);
+        addAndMakeVisible (filterBar);
 
         searchBox.setOpaque (false);   // rounded corners
         searchBox.setTextToShowWhenEmpty ("Search pedals", Theme::textLo);
@@ -128,6 +130,8 @@ public:
 
         searchBox.setBounds (b.removeFromTop (30));
         b.removeFromTop (6);
+        filterBar.setBounds (b.removeFromTop (FilterBar::height));
+        b.removeFromTop (2);
 
         if (! namSlotsFree)
             b.removeFromBottom (20);
@@ -147,6 +151,7 @@ public:
     // exposed so tests can drive them
     const juce::OwnedArray<PedalRow>& getRows() const { return rows; }
     ModelList& getLibrary() { return library; }
+    FilterBar& getFilterBar() { return filterBar; }
     juce::TextEditor& getSearchBox() { return searchBox; }
     juce::TextButton& getAddButton() { return addButton; }
     juce::TextButton& getFolderButton() { return folderButton; }
@@ -203,6 +208,7 @@ private:
     NeuralFlowAmpAudioProcessor& processor;
     juce::OwnedArray<PedalRow> rows;
     ModelList library;
+    FilterBar filterBar;
     juce::TextEditor searchBox;
     juce::TextButton addButton, folderButton;
     std::unique_ptr<juce::FileChooser> fileChooser;

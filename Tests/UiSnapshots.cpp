@@ -1160,6 +1160,24 @@ void renderUiSnapshots (const juce::File& dir)
                 settleLoop (100);
                 report (library.getNumFiles() == 2, "...and clearing it shows everything");
 
+                // the picker has the filters of the Pedals section too
+                {
+                    using Facet = LibraryFilter::Facet;
+                    report (picker->getFilterBar().getButtons().size() == 3 && ! picker->getFilterBar().getInUseButton().isVisible(),
+                            "the picker has make, model and tone filters");
+
+                    library.getFacetOptions (Facet::make);   // reads the metadata of every file
+                    settleLoop (400);
+                    const auto makes = library.getFacetOptions (Facet::make);
+                    report (makes.size() == 2 && makes[0].count == 1 && makes[1].label == "Unknown",
+                            "...with the makes of the Pedals folder (one has none: Unknown)");
+
+                    library.toggleFilter (Facet::make, "somebody else");
+                    report (library.getNumFiles() == 0, "a make nobody has leaves an empty list");
+                    library.clearFilters();
+                    report (library.getNumFiles() == 2, "...and Clear brings the pedals back");
+                }
+
                 picker->pickFile (pedalsFolder.getChildFile ("Green Drive.nam"));
                 settleLoop (300);
                 for (int i = 0; i < 300 && p.pedalNam[0].getStatus().state == NamEngine::Status::State::loading; ++i)
@@ -1399,6 +1417,184 @@ void renderUiSnapshots (const juce::File& dir)
                 report (list.deleteFile (pedalsFolder.getChildFile ("Fresh Fuzz.nam")) && list.getNumFiles() == 2
                             && libPage.getSectionButton (Kind::pedals).getCount() == 2,
                         "deleting a file updates the list and the count");
+            }
+
+            // Filters: make, model, tone and type for models, rate, length and channels for impulse responses
+            {
+                using Facet = LibraryFilter::Facet;
+                using Sort = LibraryFilter::Sort;
+
+                auto withMeta = [&] (const juce::String& make, const juce::String& model, const juce::String& tone)
+                {
+                    auto text = testModels.getChildFile ("test_wavenet.nam").loadFileAsString();
+                    return text.replace ("\"gear_make\": \"Darkglass Electronics\"", "\"gear_make\": \"" + make + "\"")
+                               .replace ("\"gear_model\": \"Microtubes 900 v2\"", "\"gear_model\": \"" + model + "\"")
+                               .replace ("\"tone_type\": \"clean\"", "\"tone_type\": \"" + tone + "\"");
+                };
+
+                ampsFolder.getChildFile ("Plexi Crunch.nam").replaceWithText (withMeta ("Marshall", "Plexi", "crunch"));
+                ampsFolder.getChildFile ("Twin.nam").replaceWithText (withMeta ("Fender", "Twin Reverb", "clean"));
+                ampsFolder.getChildFile ("Deluxe.nam").replaceWithText (withMeta ("Fender", "Deluxe Reverb", "crunch"));
+                ampsFolder.getChildFile ("Mystery.nam").replaceWithText ("{\"version\": \"0.5.4\", \"weights\": [0]}");
+
+                auto writeIr = [&] (const juce::String& name, double rate, int channels, int samples)
+                {
+                    juce::WavAudioFormat wav;
+                    std::unique_ptr<juce::FileOutputStream> out (cabsFolder.getChildFile (name).createOutputStream());
+                    if (out == nullptr)
+                        return;
+
+                    std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (out.get(), rate, (unsigned int) channels, 16, {}, 0));
+                    if (writer == nullptr)
+                        return;
+
+                    out.release();
+                    juce::AudioBuffer<float> spike (channels, samples);
+                    spike.clear();
+                    spike.setSample (0, 0, 0.8f);
+                    writer->writeFromAudioSampleBuffer (spike, 0, samples);
+                };
+                writeIr ("Hall.wav", 44100.0, 2, 26460);   // 600 ms, stereo
+
+                auto names = [&]
+                {
+                    juce::StringArray result;
+                    for (int i = 0; i < list.getNumFiles(); ++i)
+                        result.add (list.getFile (i).getFileNameWithoutExtension());
+                    return result.joinIntoString (", ");
+                };
+
+                auto optionText = [&] (Facet facet)
+                {
+                    juce::StringArray result;
+                    for (const auto& o : list.getFacetOptions (facet))
+                        result.add (o.label + " " + juce::String (o.count));
+                    return result.joinIntoString (", ");
+                };
+
+                libPage.getSectionButton (Kind::amps).triggerClick();
+                settleLoop (400);
+                optionText (Facet::make);   // asks for every file: the metadata is read in the background
+                settleLoop (600);
+
+                auto& bar = libPage.getFilterBar();
+                report (list.getNumFiles() == 5 && bar.getButtons().size() == 4, "the Amps bar offers make, model, tone and type");
+                report (optionText (Facet::make) == "Darkglass Electronics 1, Fender 2, Marshall 1, Unknown 1",
+                        "make choices with their counts, Unknown last (" + optionText (Facet::make) + ")");
+                report (optionText (Facet::tone) == "Clean 2, Crunch 2, Unknown 1", "tone choices are prettified (" + optionText (Facet::tone) + ")");
+                report (optionText (Facet::type) == "Amp 4, Unknown 1", "type choices (" + optionText (Facet::type) + ")");
+
+                // OR inside a facet
+                list.toggleFilter (Facet::make, "fender");
+                settleLoop (50);
+                report (list.getNumFiles() == 2, "one make narrows the list (" + names() + ")");
+                list.toggleFilter (Facet::make, "marshall");
+                settleLoop (50);
+                report (list.getNumFiles() == 3, "a second make adds its files: filters of one facet are OR-ed (" + names() + ")");
+                report (bar.getButtons()[0]->getCaption().contains ("2") && bar.getClearButton().isVisible(),
+                        "...the button counts them and Clear appears (" + bar.getButtons()[0]->getCaption() + ")");
+
+                // AND between facets
+                list.toggleFilter (Facet::tone, "crunch");
+                settleLoop (50);
+                report (list.getNumFiles() == 2 && names() == "Deluxe, Plexi Crunch",
+                        "filters of different facets are AND-ed (" + names() + ")");
+                report (optionText (Facet::model) == "Deluxe Reverb 1, Plexi 1",
+                        "model choices narrow to what the other filters leave (" + optionText (Facet::model) + ")");
+                report (optionText (Facet::tone) == "Clean 1, Crunch 2", "...and a facet counts without its own filter (" + optionText (Facet::tone) + ")");
+
+                // with the search
+                libPage.getSearchBox().setText ("marshall", true);
+                settleLoop (100);
+                report (list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Plexi Crunch.nam", "the search and the filters are AND-ed");
+                save (*editor, dir.getChildFile ("ui_library_filters.png"));
+                libPage.getSearchBox().setText ("", true);
+                settleLoop (100);
+
+                // models of a make that is no longer wanted are dropped
+                list.clearFilters();
+                list.toggleFilter (Facet::make, "fender");
+                list.toggleFilter (Facet::model, "twin reverb");
+                report (list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Twin.nam", "a model narrows within its make");
+                list.setFilter (Facet::make, { "marshall" });
+                report (list.getFilter().count (Facet::model) == 0 && list.getNumFiles() == 1,
+                        "changing the make drops a model that does not fit it (" + names() + ")");
+
+                // the options panel
+                {
+                    list.clearFilters();
+                    FilterOptionsPanel panel (list, Facet::make);
+                    report (panel.getNumOptions() == 4 && panel.getOption (1).label == "Fender", "the panel lists the choices");
+                    panel.toggleRow (1);
+                    report (list.getFilter().has (Facet::make, "fender") && list.getNumFiles() == 2, "ticking a choice filters at once");
+                    panel.toggleRow (1);
+                    report (list.getNumFiles() == 5, "...and un-ticking brings the files back");
+                }
+
+                // order
+                list.clearFilters();
+                list.setSort (Sort::make);
+                report (list.getNumFiles() == 5 && list.getFile (0).getFileName() == "Plexi.nam" && list.getFile (4).getFileName() == "Mystery.nam",
+                        "sorted by make, files without one last (" + names() + ")");
+                report (bar.getSortButton().getCaption() == juce::String ("Sort") + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")) + "Make",
+                        "the sort button names the order");
+                ampsFolder.getChildFile ("Twin.nam").setLastModificationTime (juce::Time::getCurrentTime() + juce::RelativeTime::minutes (30));
+                list.setSort (Sort::newest);
+                list.rescan();
+                report (list.getFile (0).getFileName() == "Twin.nam", "sorted by newest (" + names() + ")");
+                list.setSort (Sort::name);
+
+                // in use
+                if (list.isLoaded && list.isLoaded (ampsFolder.getChildFile ("Plexi.nam")))
+                {
+                    list.setOnlyInUse (true);
+                    report (list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Plexi.nam", "\"in use\" keeps what is loaded");
+                    report (bar.getInUseButton().isActive(), "...and lights its switch");
+                    list.setOnlyInUse (false);
+                }
+
+                // Pedals offer three facets, Other starts with the type
+                libPage.getSectionButton (Kind::pedals).triggerClick();
+                settleLoop (300);
+                report (bar.getButtons().size() == 3, "Pedals offer make, model and tone");
+                libPage.getSectionButton (Kind::other).triggerClick();
+                settleLoop (300);
+                report (bar.getButtons().size() == 4 && bar.getButtons()[0]->getCaption() == "Type", "Other starts with the type");
+
+                // Cabs: rate, length, channels
+                list.toggleFilter (Facet::make, "x");
+                libPage.getSectionButton (Kind::cabs).triggerClick();
+                settleLoop (300);
+                report (! list.getFilter().isActive() && bar.getButtons().size() == 3, "another section starts without filters");
+                report (optionText (Facet::rate) == "44.1 kHz 1, 48 kHz 1", "IR rates (" + optionText (Facet::rate) + ")");
+                report (optionText (Facet::length) == "Short (under 100 ms) 1, Long (over 400 ms) 1", "IR lengths (" + optionText (Facet::length) + ")");
+                report (optionText (Facet::channels) == "Mono 1, Stereo 1", "IR channels (" + optionText (Facet::channels) + ")");
+                list.toggleFilter (Facet::length, "long");
+                report (list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Hall.wav", "an IR filter narrows the list (" + names() + ")");
+                list.clearFilters();
+                list.setSort (Sort::length);
+                report (names() == "Cab 4x12, Hall", "IRs sort by length (" + names() + ")");
+                list.setSort (Sort::name);
+                list.toggleFilter (Facet::rate, "44100");
+                list.toggleFilter (Facet::rate, "48000");
+                report (list.getNumFiles() == 2, "several rates at once");
+                save (*editor, dir.getChildFile ("ui_library_filters_cabs.png"));
+
+                // the popover of a facet
+                list.clearFilters();
+                bar.showOptions (Facet::rate, *bar.getButtons()[0]);
+                settleLoop (300);
+                report (findFirst<FilterOptionsPanel> (*editor) != nullptr, "a facet button opens its choices in a call-out");
+                if (auto* panel = findFirst<FilterOptionsPanel> (*editor))
+                    panel->toggleRow (0);
+                settleLoop (100);
+                save (*editor, dir.getChildFile ("ui_library_filter_popover.png"));
+                if (auto* box = findFirst<juce::CallOutBox> (*editor))
+                    box->dismiss();
+                settleLoop (200);
+
+                libPage.getSectionButton (Kind::pedals).triggerClick();
+                settleLoop (300);
             }
 
             // Settings opens over the Library and gives it back

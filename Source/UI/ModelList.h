@@ -2,6 +2,7 @@
 
 #include "../PluginProcessor.h"
 #include "FileBrowser.h"
+#include "LibraryFilter.h"
 
 //==============================================================================
 /** A list of the files in one library folder (Amps, Pedals, Cabs or Other), two lines per file: the name
@@ -80,11 +81,97 @@ public:
         selected = {};
         files.clear();
         all.clear();
+
+        // a section has other facets: the wanted values do not carry over (the order does, if it exists there)
+        const auto order = filter.sort;
+        const auto orders = sorts();
+        filter = {};
+        filter.sort = std::find (orders.begin(), orders.end(), order) != orders.end() ? order : Sort::name;
         rescan();
 
         if (onSelected)
             onSelected ({});
     }
+
+    //==========================================================================
+    // Filters and order. The facets on offer depend on the kind (see LibraryFilter::facetsFor).
+    using Facet = LibraryFilter::Facet;
+    using Sort  = LibraryFilter::Sort;
+
+    /** Called after the shown list was rebuilt (search, filter, new files, metadata that arrived). */
+    std::function<void()> onFiltersChanged;
+
+    std::vector<Facet> facets() const { return LibraryFilter::facetsFor (kind); }
+    std::vector<Sort> sorts() const   { return LibraryFilter::sortsFor (kind); }
+    const LibraryFilter::State& getFilter() const { return filter; }
+
+    /** The choices of a facet with their counts: how many files each has among those that pass all the
+        other filters (and the search), so the numbers show what ticking a choice would leave. */
+    std::vector<LibraryFilter::Option> getFacetOptions (Facet facet)
+    {
+        const auto offered = facets();
+        std::map<juce::String, LibraryFilter::Option> byKey;
+
+        for (const auto& file : all)
+        {
+            const auto facts = factsOf (file);
+            if (! matchesSearch (file) || ! LibraryFilter::matches (filter, facts, inUse (file), offered, &facet))
+                continue;
+
+            const auto value = LibraryFilter::valueOf (facet, facts);
+            auto& option = byKey[value.key];
+            if (option.label.isEmpty())
+                option = { value.key, value.label, 0 };
+            ++option.count;
+        }
+
+        return LibraryFilter::orderedOptions (facet, std::move (byKey), filter);
+    }
+
+    void toggleFilter (Facet facet, const juce::String& key)
+    {
+        filter.toggle (facet, key);
+        filterEdited (facet);
+    }
+
+    void setFilter (Facet facet, std::set<juce::String> keys)
+    {
+        filter.set (facet, std::move (keys));
+        filterEdited (facet);
+    }
+
+    void setOnlyInUse (bool on)
+    {
+        if (filter.onlyInUse != on)
+        {
+            filter.onlyInUse = on;
+            rebuildVisible();
+        }
+    }
+
+    void setSort (Sort order)
+    {
+        if (filter.sort != order)
+        {
+            filter.sort = order;
+            rebuildVisible();
+        }
+    }
+
+    void clearFilters()
+    {
+        if (filter.isActive())
+        {
+            filter.clear();
+            rebuildVisible();
+        }
+    }
+
+    /** Applies search, filters and order again (what "in use" means changed). */
+    void refilter() { rebuildVisible(); }
+
+    /** True if the search or a filter narrows the list. */
+    bool isNarrowed() const { return search.isNotEmpty() || filter.isActive(); }
 
     /** Only lines that contain `text` in their name or in what they say about themselves are shown. */
     void setSearch (const juce::String& text)
@@ -118,6 +205,13 @@ public:
     {
         FileLibrary::ensureFolders();
         all = FileLibrary::list (getFolder(), FileLibrary::wildcardFor (kind));
+
+        // the filters offer what every file says about itself, not only the lines on screen: start reading them
+        // all in the background (the cache answers at once for files it already knows)
+        if (kind != FileLibrary::Kind::cabs)
+            for (const auto& file : all)
+                processor.metadata.get (file);
+
         rebuildVisible();
     }
 
@@ -264,7 +358,16 @@ public:
             g.setColour (Theme::textLo);
             g.setFont (Theme::ui (12.0f));
 
-            const auto text = all.isEmpty() ? emptyText : juce::String ("Nothing matches \"") + search + "\".";
+            juce::String text = emptyText;
+
+            if (! all.isEmpty())
+            {
+                if (filter.isActive())
+                    text = search.isEmpty() ? "Nothing matches the filters." : juce::String ("Nothing matches \"") + search + "\" and the filters.";
+                else
+                    text = juce::String ("Nothing matches \"") + search + "\".";
+            }
+
             g.drawFittedText (text, getLocalBounds().reduced (6, 8), juce::Justification::topLeft, 6);
         }
 
@@ -312,10 +415,135 @@ private:
     /** Metadata arrived: lines can change their text and the search may match more. */
     void changeListenerCallback (juce::ChangeBroadcaster*) override
     {
-        if (search.isNotEmpty())
+        // the filters and the order read the metadata too: files move between "Unknown" and their values
+        if (search.isNotEmpty() || filter.isActive() || filter.sort == Sort::make)
+        {
             rebuildVisible();
+        }
         else
+        {
             list.repaint();
+
+            if (onFiltersChanged)
+                onFiltersChanged();
+        }
+    }
+
+    bool inUse (const juce::File& file) const { return isLoaded && isLoaded (file); }
+
+    /** What the filters know about a file: its metadata (models) or its header (impulse responses). */
+    LibraryFilter::Facts factsOf (const juce::File& file)
+    {
+        LibraryFilter::Facts facts;
+
+        if (kind == FileLibrary::Kind::cabs)
+            facts.ir = irFacts (file);
+        else
+            facts.info = processor.metadata.get (file);
+
+        return facts;
+    }
+
+    void filterEdited (Facet facet)
+    {
+        if (facet == Facet::make)
+            pruneModels();
+
+        rebuildVisible();
+    }
+
+    /** Models that belong to none of the wanted makes cannot match any more: they are un-wanted. */
+    void pruneModels()
+    {
+        const auto wanted = filter.selected.find (Facet::model);
+        if (wanted == filter.selected.end())
+            return;
+
+        LibraryFilter::State makesOnly;
+        if (filter.selected.count (Facet::make) > 0)
+            makesOnly.selected[Facet::make] = filter.selected[Facet::make];
+
+        std::set<juce::String> present;
+        for (const auto& file : all)
+        {
+            const auto facts = factsOf (file);
+            if (LibraryFilter::matches (makesOnly, facts, false, { Facet::make }))
+                present.insert (LibraryFilter::valueOf (Facet::model, facts).key);
+        }
+
+        std::set<juce::String> kept;
+        for (const auto& key : wanted->second)
+            if (present.count (key) > 0)
+                kept.insert (key);
+
+        filter.set (Facet::model, std::move (kept));
+    }
+
+    /** Puts `shown` in the order of the filter. Name order needs no facts; the others read them once per file. */
+    void sortShown (juce::Array<juce::File>& shown)
+    {
+        struct Item
+        {
+            juce::File file;
+            juce::String make, model;
+            juce::int64 modified = 0;
+            double length = 0.0;
+        };
+
+        std::vector<Item> items;
+        items.reserve ((size_t) shown.size());
+
+        for (const auto& file : shown)
+        {
+            Item item { file, {}, {}, 0, 0.0 };
+
+            if (filter.sort == Sort::make)
+            {
+                const auto info = processor.metadata.get (file);
+                item.make = info.make.trim();
+                item.model = info.model.trim();
+            }
+            else if (filter.sort == Sort::newest)
+            {
+                item.modified = file.getLastModificationTime().toMilliseconds();
+            }
+            else if (filter.sort == Sort::length)
+            {
+                const auto ir = irFacts (file);
+                item.length = ir.found ? ir.lengthMs : 1.0e12;   // unknown last
+            }
+
+            items.push_back (std::move (item));
+        }
+
+        auto byName = [] (const Item& a, const Item& b)
+        {
+            return a.file.getFileNameWithoutExtension().compareNatural (b.file.getFileNameWithoutExtension()) < 0;
+        };
+
+        std::stable_sort (items.begin(), items.end(), [&] (const Item& a, const Item& b)
+        {
+            switch (filter.sort)
+            {
+                case Sort::make:
+                {
+                    if (a.make.isEmpty() != b.make.isEmpty())
+                        return b.make.isEmpty();   // without a make last
+
+                    if (const int c = a.make.compareIgnoreCase (b.make))   return c < 0;
+                    if (const int c = a.model.compareIgnoreCase (b.model)) return c < 0;
+                    return byName (a, b);
+                }
+                case Sort::newest: return a.modified != b.modified ? a.modified > b.modified : byName (a, b);
+                case Sort::length: return a.length != b.length ? a.length < b.length : byName (a, b);
+                case Sort::name:   break;
+            }
+            return byName (a, b);
+        });
+
+        shown.clearQuick();
+        for (const auto& item : items)
+            shown.add (item.file);
     }
 
     void setDropHighlight (bool on)
@@ -339,9 +567,14 @@ private:
     void rebuildVisible()
     {
         juce::Array<juce::File> shown;
+        const auto offered = facets();
+
         for (const auto& file : all)
-            if (matchesSearch (file))
+            if (matchesSearch (file)
+                && (! filter.isActive() || LibraryFilter::matches (filter, factsOf (file), inUse (file), offered)))
                 shown.add (file);
+
+        sortShown (shown);
 
         const bool same = shown == files;
         files = std::move (shown);
@@ -360,30 +593,46 @@ private:
 
         list.repaint();
         repaint();
+
+        if (onFiltersChanged)
+            onFiltersChanged();
     }
 
-    /** "48.0 kHz · 85 ms" of an impulse response, read once per file version. */
-    juce::String audioInfo (const juce::File& file)
+    /** The header of an impulse response, read once per file version. */
+    LibraryFilter::IrFacts irFacts (const juce::File& file)
     {
         const auto key = file.getFullPathName();
         const auto stamp = file.getLastModificationTime().toMilliseconds();
-        const auto it = audioInfos.find (key);
+        const auto it = irInfos.find (key);
 
-        if (it != audioInfos.end() && it->second.first == stamp)
+        if (it != irInfos.end() && it->second.first == stamp)
             return it->second.second;
 
-        juce::String text;
+        LibraryFilter::IrFacts facts;
         std::unique_ptr<juce::AudioFormatReader> reader (processor.formatManager.createReaderFor (file));
 
         if (reader != nullptr && reader->sampleRate > 0.0)
         {
-            const double ms = 1000.0 * (double) reader->lengthInSamples / reader->sampleRate;
-            text = juce::String (reader->sampleRate / 1000.0, 1) + " kHz" + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
-                 + (ms >= 1000.0 ? juce::String (ms / 1000.0, 2) + " s" : juce::String (juce::roundToInt (ms)) + " ms");
+            facts.found = true;
+            facts.sampleRate = reader->sampleRate;
+            facts.lengthMs = 1000.0 * (double) reader->lengthInSamples / reader->sampleRate;
+            facts.channels = (int) reader->numChannels;
         }
 
-        audioInfos[key] = { stamp, text };
-        return text;
+        irInfos[key] = { stamp, facts };
+        return facts;
+    }
+
+    /** "48.0 kHz · 85 ms" of an impulse response. */
+    juce::String audioInfo (const juce::File& file)
+    {
+        const auto facts = irFacts (file);
+        if (! facts.found)
+            return {};
+
+        const double ms = facts.lengthMs;
+        return juce::String (facts.sampleRate / 1000.0, 1) + " kHz" + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
+             + (ms >= 1000.0 ? juce::String (ms / 1000.0, 2) + " s" : juce::String (juce::roundToInt (ms)) + " ms");
     }
 
     void pick (const juce::File& file)
@@ -474,7 +723,8 @@ private:
     juce::ListBox list;
     juce::Array<juce::File> all, files;   // all = the folder, files = what matches the search
     juce::File selected;
-    std::map<juce::String, std::pair<juce::int64, juce::String>> audioInfos;
+    std::map<juce::String, std::pair<juce::int64, LibraryFilter::IrFacts>> irInfos;
+    LibraryFilter::State filter;
     bool pickOnClick = false, dropHighlight = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ModelList)
