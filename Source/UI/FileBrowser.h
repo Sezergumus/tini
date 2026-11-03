@@ -162,7 +162,7 @@ namespace FileActions
 
     The list follows the folder: while it is visible it looks at the folder about once a second, so files
     added or removed in Explorer show up without leaving the app. It also manages the files: a right
-    click offers Rename, Show in Explorer and Delete (to the Recycle Bin), "Add files" copies files in,
+    click offers Rename, Show in Explorer and Delete (to the Recycle Bin), "Add packs" copies files in,
     "Open folder" shows the folder, and files can be dropped onto the list. */
 class FileBrowserList : public juce::Component,
                         public juce::FileDragAndDropTarget,
@@ -182,8 +182,8 @@ public:
         list.getVerticalScrollBar().setAutoHide (true);
         addAndMakeVisible (list);
 
-        addButton.setButtonText ("Add files");
-        addButton.setTooltip ("Copy files into this library");
+        addButton.setButtonText ("Add packs");
+        addButton.setTooltip ("Copy files, zip packs or folders into this library");
         addButton.onClick = [this] { chooseFilesToAdd(); };
         addAndMakeVisible (addButton);
 
@@ -238,18 +238,37 @@ public:
     /** Copies `sources` into this library and shows them. Returns how many were added. */
     int addFiles (const juce::Array<juce::File>& sources)
     {
-        const int added = FileActions::importAll (sources, kind);
+        const FileLibrary::Batch batch (sources);
+        return addBatch (batch, false);
+    }
 
-        if (added > 0)
+    /** Like addFiles, but asks first when something is in the library already or looks like it belongs to
+        another section (a pedal capture offered to the amp list). */
+    void addFilesChecked (const juce::Array<juce::File>& sources)
+    {
+        auto batch = std::make_shared<FileLibrary::Batch> (sources);
+        const auto report = FileLibrary::inspect (*batch, &kind);
+
+        FileActions::confirmImport (this, report, FileLibrary::folderName (kind),
+                                    [safe = juce::Component::SafePointer<FileBrowserList> (this), batch] (bool again)
         {
-            // the new files live in the library: if the loaded file is elsewhere, show the library
-            if (FileLibrary::folderFor (current, kind) != FileLibrary::libraryFolder (kind))
-                pinned = FileLibrary::libraryFolder (kind);
+            if (safe != nullptr)
+                safe->addBatch (*batch, again);
+        });
+    }
 
+    int addBatch (const FileLibrary::Batch& batch, bool again)
+    {
+        const auto done = FileLibrary::importBatch (batch, &kind, FileLibrary::Kind::amps, again);
+
+        if (! done.empty())
+        {
+            // the new files live in the library: show where they went (a pack is a folder of its own)
+            pinned = done.front().file.getParentDirectory();
             rescan (folderToShow());
         }
 
-        return added;
+        return (int) done.size();
     }
 
     /** Renames a file of the list (keeps its extension). */
@@ -330,7 +349,7 @@ public:
 
             const auto what = FileLibrary::isModelKind (kind) ? juce::String (".nam files")
                                                               : juce::String ("impulse responses (.wav)");
-            g.drawFittedText ("No " + what + " here yet.\nDrop files onto this list, use Add files,\nor copy them into the folder - the list follows it.",
+            g.drawFittedText ("No " + what + " here yet.\nDrop files onto this list, use Add packs,\nor copy them into the folder - the list follows it.",
                               body, juce::Justification::topLeft, 6);
         }
 
@@ -355,7 +374,13 @@ public:
     // Files dropped on the list are only added to the library; the loaded model stays.
     bool isInterestedInFileDrag (const juce::StringArray& dragged) override
     {
-        return FileActions::anyFits (dragged, kind);
+        for (const auto& path : dragged)
+        {
+            const juce::File f (path);
+            if (f.isDirectory() || FileLibrary::isArchive (f) || FileLibrary::fits (f, kind))
+                return true;
+        }
+        return false;
     }
 
     void fileDragEnter (const juce::StringArray&, int, int) override { setDropHighlight (true); }
@@ -369,7 +394,7 @@ public:
         for (const auto& path : dropped)
             sources.add (juce::File (path));
 
-        addFiles (sources);
+        addFilesChecked (sources);
     }
 
     // exposed so tests can drive them
@@ -457,9 +482,9 @@ private:
 
     void chooseFilesToAdd()
     {
-        fileChooser = std::make_unique<juce::FileChooser> ("Add files to the " + FileLibrary::title (kind).toLowerCase(),
+        fileChooser = std::make_unique<juce::FileChooser> ("Add packs and files to the " + FileLibrary::title (kind).toLowerCase(),
                                                            FileLibrary::downloadsFolder(),
-                                                           wildcard);
+                                                           wildcard + ";*.zip");
 
         const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
                          | juce::FileBrowserComponent::canSelectMultipleItems;
@@ -467,7 +492,7 @@ private:
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<FileBrowserList> (this)] (const juce::FileChooser& fc)
         {
             if (safe != nullptr)
-                safe->addFiles (fc.getResults());
+                safe->addFilesChecked (fc.getResults());
         });
     }
 

@@ -77,7 +77,7 @@ public:
     /** Called once after one or more files were moved (a single file or a whole pack). */
     std::function<void()> onMovedAll;
 
-    /** Called after files were copied in (with the files in the library); a drop or Add files. */
+    /** Called after files were copied in (with the files in the library); a drop or Add packs. */
     std::function<void (const juce::Array<juce::File>&)> onAdded;
 
     /** When set, files dropped on the list are handed to this instead of being copied into the list's own
@@ -104,6 +104,7 @@ public:
 
         kind = newKind;
         selected = {};
+        fresh.clear();
         files.clear();
         all.clear();
 
@@ -239,6 +240,37 @@ public:
             list.selectRow (row);
     }
 
+    /** Makes the files that were just added stand out: their packs open, the first one is selected and in view,
+        and all of them are tinted until the next click (or about eight seconds). */
+    void highlightFiles (const juce::Array<juce::File>& added)
+    {
+        fresh.clear();
+        juce::File first;
+
+        for (const auto& f : added)
+        {
+            if (! files.contains (f))
+                continue;
+
+            fresh.insert (f.getFullPathName());
+            openPacks.insert (FileLibrary::packOf (f, kind));
+
+            if (first == juce::File())
+                first = f;
+        }
+
+        freshUntil = juce::Time::getMillisecondCounter() + 8000;
+        buildRows();
+        list.updateContent();
+
+        if (first != juce::File())
+            selectFile (first);
+
+        list.repaint();
+    }
+
+    int getNumHighlighted() const { return (int) fresh.size(); }
+
     /** Opens or closes a pack. */
     void togglePack (const juce::String& pack)
     {
@@ -282,7 +314,7 @@ public:
     }
 
     /** Like addFiles, but asks first when something is in the library already or looks like it belongs to
-        another section. This is what a drop or the Add files button of a list runs. */
+        another section. This is what a drop or the Add packs button of a list runs. */
     void addFilesChecked (const juce::Array<juce::File>& sources)
     {
         auto batch = std::make_shared<FileLibrary::Batch> (sources);
@@ -465,6 +497,65 @@ public:
         return (int) moved.size();
     }
 
+    /** Moves every file of a pack to the Recycle Bin. Returns how many could not be removed (in use or protected). */
+    int deletePack (const juce::String& pack)
+    {
+        juce::Array<juce::File> members;
+        for (const auto& file : all)
+            if (FileLibrary::packOf (file, kind) == pack)
+                members.add (file);
+
+        juce::MouseCursor::showWaitCursor();
+
+        int failed = 0;
+        for (const auto& file : members)
+        {
+            if (FileLibrary::removeFile (file))
+            {
+                if (selected == file)
+                    selected = {};
+            }
+            else
+            {
+                ++failed;
+            }
+        }
+
+        FileLibrary::removeIfEmpty (FileLibrary::packFolder (kind, pack));
+        juce::MouseCursor::hideWaitCursor();
+
+        rescan();
+
+        for (const auto& file : members)
+            if (! file.existsAsFile() && onDeleted)
+                onDeleted (file);
+
+        if (onMovedAll)
+            onMovedAll();
+
+        return failed;
+    }
+
+    void askDeletePack (const juce::String& pack)
+    {
+        int count = 0;
+        for (const auto& file : all)
+            count += FileLibrary::packOf (file, kind) == pack ? 1 : 0;
+
+        const auto where = FileLibrary::useTrash() ? juce::String ("the Recycle Bin") : juce::String ("nowhere");
+        auto dialog = std::make_unique<FormDialog> ("Delete pack", "Move the pack \"" + pack + "\" with its " + juce::String (count)
+                                                        + (count == 1 ? " file" : " files") + " to " + where + "?",
+                                                    "Delete pack", DialogButton::Style::danger);
+
+        dialog->onSubmit = [safe = juce::Component::SafePointer<ModelList> (this), pack] (FormDialog&)
+        {
+            const int failed = safe != nullptr ? safe->deletePack (pack) : 0;
+            return failed == 0 ? juce::Result::ok()
+                               : juce::Result::fail (juce::String (failed) + (failed == 1 ? " file is" : " files are") + " in use or protected and stayed.");
+        };
+        FormDialog::show (std::move (dialog), this);
+    }
+
     /** The right click menu of a pack line. */
     void showPackMenu (const juce::String& pack)
     {
@@ -472,13 +563,14 @@ public:
             return;
 
         juce::PopupMenu menu;
-        menu.addSectionHeader (pack);
 
         for (auto k : { FileLibrary::Kind::amps, FileLibrary::Kind::pedals, FileLibrary::Kind::other })
             if (k != kind)
                 menu.addItem (10 + (int) k, "Move the whole pack to " + FileLibrary::folderName (k));
 
+        menu.addSeparator();
         menu.addItem (3, "Show in file manager");
+        menu.addItem (4, "Delete pack...");
         Theme::styleMenu (menu, *this);
 
         menu.showMenuAsync (Theme::menuAtMouse (*this),
@@ -489,6 +581,8 @@ public:
 
             if (choice == 3)
                 FileLibrary::packFolder (safe->kind, pack).revealToUser();
+            else if (choice == 4)
+                safe->askDeletePack (pack);
             else if (choice >= 10)
                 safe->movePack (pack, (FileLibrary::Kind) (choice - 10));
         });
@@ -676,6 +770,12 @@ public:
 private:
     void timerCallback() override
     {
+        if (! fresh.empty() && (juce::int32) (juce::Time::getMillisecondCounter() - freshUntil) > 0)
+        {
+            fresh.clear();
+            list.repaint();
+        }
+
         if (isShowing())
             refreshIfChanged();
     }
@@ -978,6 +1078,14 @@ private:
         const float indent = line.pack.isEmpty() ? 0.0f : 16.0f;   // the files of a pack sit under their header
         r.removeFromLeft (indent);
 
+        if (fresh.count (file.getFullPathName()) > 0)
+        {
+            g.setColour (Theme::accent.withAlpha (0.14f));
+            g.fillRoundedRectangle (r, 6.0f);
+            g.setColour (Theme::accent);
+            g.fillRoundedRectangle (r.withWidth (3.0f).reduced (0.0f, 6.0f), 1.5f);
+        }
+
         if (rowSelected)
         {
             g.setColour (Theme::surfaceHi);
@@ -1071,6 +1179,9 @@ private:
             return;
         }
 
+        fresh.clear();
+        list.repaint();
+
         if (e.mods.isPopupMenu())
             showMenu (row);
         else if (pickOnClick)
@@ -1104,6 +1215,8 @@ private:
     juce::Array<juce::File> all, files;   // all = the folder (packs included), files = what matches the search
 
     std::vector<Row> rows;
+    std::set<juce::String> fresh;   // paths of the files that were just added: they stand out for a while
+    juce::uint32 freshUntil = 0;
     std::set<juce::String> openPacks;
     bool rowsChanged = false;
     juce::File selected;

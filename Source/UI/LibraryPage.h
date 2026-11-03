@@ -106,7 +106,7 @@ private:
 //==============================================================================
 /** The Library: everything in Documents/tini in four sections (Amps, Pedals, Cabs, Other models).
 
-    Left, Add files above the sections with their file counts. Right, a search field with Open folder, the
+    Left, Add packs above the sections with their file counts. Right, a search field with Open folder, the
     files of the open section (name and what the file says about itself, a dot on the ones in use) and
     under them the actions for the selected file:
 
@@ -155,7 +155,7 @@ public:
         searchBox.onTextChange = [this] { list.setSearch (searchBox.getText()); updateActions(); };
         addAndMakeVisible (searchBox);
 
-        addButton.setButtonText ("Add files");
+        addButton.setButtonText ("Add packs");
         addButton.onClick = [this] { chooseFilesToAdd(); };
         folderButton.setButtonText ("Open folder");
         folderButton.setTooltip ("Show this folder in the file manager");
@@ -389,9 +389,9 @@ private:
     {
         switch (k)
         {
-            case Kind::amps:   return "No amp models yet.\nDrop .nam files here or use Add files. Models whose gear type is amp or preamp are sorted in here by themselves.";
-            case Kind::pedals: return "No pedal captures yet.\nDrop .nam files here or use Add files. Each one becomes a pedal named after its model.";
-            case Kind::cabs:   return "No cabinet impulse responses yet.\nDrop .wav files here or use Add files.";
+            case Kind::amps:   return "No amp models yet.\nDrop .nam files or zip packs here or use Add packs. Models whose gear type is amp or preamp are sorted in here by themselves.";
+            case Kind::pedals: return "No pedal captures yet.\nDrop .nam files or zip packs here or use Add packs. Each one becomes a pedal named after its model.";
+            case Kind::cabs:   return "No cabinet impulse responses yet.\nDrop .wav files or zip packs here or use Add packs.";
             case Kind::other:  return "Nothing here yet.\nModels that are neither an amp nor a pedal (amp with cab, studio chains) are kept here.";
         }
         return {};
@@ -491,7 +491,7 @@ private:
         return sig;
     }
 
-    /** Add files: models and impulse responses alike. Every file is sorted by itself (a model by the gear
+    /** Add packs: models, impulse responses and zip packs alike. Every file is sorted by itself (a model by the gear
         type in its metadata, an audio file is a cab); the section of the file that came first opens. */
     void chooseFilesToAdd()
     {
@@ -537,9 +537,18 @@ public:
 
         if (! done.empty())
         {
-            showSection (done.front().kind);
+            const auto firstKind = done.front().kind;
+            showSection (firstKind);
             list.rescan();   // the section may be the one that was already open
             countFiles();
+
+            juce::Array<juce::File> added;
+            for (const auto& item : done)
+                if (item.kind == firstKind)
+                    added.add (item.file);
+
+            list.highlightFiles (added);   // show where it all went
+            updateActions();
         }
 
         return (int) done.size();

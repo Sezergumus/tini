@@ -638,6 +638,7 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
     state.setProperty("chain", PedalCatalog::orderToString(getChainOrder()), nullptr);
     state.setProperty("presetName", currentPresetName, nullptr);
     state.setProperty("tunerRef", getTunerReferenceHz(), nullptr);
+    state.setProperty("tunerMuteOn", getTunerMuteDefault(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
@@ -662,6 +663,7 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
     setChainOrder(order);
 
     setTunerReferenceHz(state.hasProperty("tunerRef") ? (float) (double) state.getProperty("tunerRef") : 440.0f);
+    setTunerMuteDefault(state.hasProperty("tunerMuteOn") ? (bool) state.getProperty("tunerMuteOn") : true);
 
     // Which preset the session was based on (the values above stay as saved, edits included)
     currentPresetName = state.getProperty("presetName").toString();

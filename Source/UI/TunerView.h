@@ -14,8 +14,14 @@ public:
     explicit TunerView (NeuralFlowAmpAudioProcessor& p)
         : processor (p), muteSwitch (Theme::accent)
     {
-        muteSwitch.setToggleState (false, juce::dontSendNotification);
-        muteSwitch.onClick = [this] { processor.setTunerMute (muteSwitch.getToggleState()); };
+        // muted when opened the first time; after that the way the user left the switch
+        muteSwitch.setToggleState (processor.getTunerMuteDefault(), juce::dontSendNotification);
+        processor.setTunerMute (muteSwitch.getToggleState());
+        muteSwitch.onClick = [this]
+        {
+            processor.setTunerMute (muteSwitch.getToggleState());
+            processor.setTunerMuteDefault (muteSwitch.getToggleState());
+        };
         addAndMakeVisible (muteSwitch);
 
         processor.setTunerActive (true);

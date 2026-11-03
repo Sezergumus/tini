@@ -69,6 +69,10 @@ public:
     void setTunerMute(bool on) { tunerMute.store(on); }
     bool isTunerMuted() const { return tunerMute.load(); }
 
+    /** Whether the tuner opens with the output muted: on the first time, then whatever the user chose last. */
+    bool getTunerMuteDefault() const { return tunerMuteDefault.load(); }
+    void setTunerMuteDefault(bool on) { tunerMuteDefault.store(on); }
+
     /** Message thread: moves up to `maxSamples` of the newest input (oldest first) into `dest`. */
     int readTunerSamples(float* dest, int maxSamples);
 
@@ -162,7 +166,7 @@ private:
     static constexpr int tunerFifoSize = 32768;
     juce::AbstractFifo tunerFifo { tunerFifoSize };
     std::array<float, tunerFifoSize> tunerBuffer {};
-    std::atomic<bool> tunerActive { false }, tunerMute { false };
+    std::atomic<bool> tunerActive { false }, tunerMute { false }, tunerMuteDefault { true };
     void pushTunerSamples(const float* samples, int numSamples);
 
     juce::String currentPresetName; // empty = untitled

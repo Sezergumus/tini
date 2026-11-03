@@ -400,7 +400,17 @@ namespace FileLibrary
 
         explicit Batch (const juce::Array<juce::File>& inputs)
         {
-            std::map<juce::String, juce::Array<juce::File>> loose;
+            std::vector<std::pair<juce::String, juce::Array<juce::File>>> loose;   // in the order they came
+
+            auto looseFor = [&loose] (const juce::String& key) -> juce::Array<juce::File>&
+            {
+                for (auto& entry : loose)
+                    if (entry.first == key)
+                        return entry.second;
+
+                loose.emplace_back (key, juce::Array<juce::File>());
+                return loose.back().second;
+            };
 
             for (const auto& input : inputs)
             {
@@ -422,7 +432,7 @@ namespace FileLibrary
                 }
                 else if (isUsable (input))
                 {
-                    loose[input.getParentDirectory().getFullPathName() + (input.hasFileExtension ("nam") ? "|m" : "|a")].add (input);
+                    looseFor (input.getParentDirectory().getFullPathName() + (input.hasFileExtension ("nam") ? "|m" : "|a")).add (input);
                 }
             }
 

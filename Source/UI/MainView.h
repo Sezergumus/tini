@@ -215,57 +215,15 @@ public:
         for (const auto& path : paths)
             files.add (juce::File (path));
 
-        importAndLoad (files);
+        importAndShow (files);
     }
 
-    /** Copies models and impulse responses into the library and loads the first of each: the model into
-        the amp (and switches the amp to NAM), the impulse response into the cab. Other files are ignored. */
-    void importAndLoad (const juce::Array<juce::File>& files)
+    /** Files dropped on the window go into the library, sorted by what they are, and the Library opens on
+        them (highlighted). Nothing is loaded or added to the chain by itself: that is a choice for the Library. */
+    void importAndShow (const juce::Array<juce::File>& files)
     {
-        juce::File model, ir;
-        juce::Array<juce::File> pedals;
-
-        const FileLibrary::Batch batch (files);   // zips and folders become packs
-
-        for (const auto& item : batch.items)
-        {
-            const auto& file = item.file;
-            FileLibrary::Kind kind;
-            if (! FileLibrary::kindOfFile (file, kind))
-                continue;
-
-            auto imported = FileLibrary::importFile (file, kind, item.pack);
-            if (! imported.existsAsFile())
-                imported = file;   // the library could not be written: use the file where it is
-
-            if (kind == FileLibrary::Kind::pedals)
-            {
-                pedals.add (imported.existsAsFile() ? imported : file);   // a pedal capture joins the chain as a NAM pedal
-                continue;
-            }
-
-            auto& first = kind == FileLibrary::Kind::cabs ? ir : model;
-            if (first == juce::File())
-                first = imported;
-        }
-
-        if (model != juce::File() || ir != juce::File() || ! pedals.isEmpty())
-            showPage (Page::rig);   // show what was loaded
-
-        for (const auto& pedal : pedals)
-            chain.addNamPedal (pedal);
-
-        if (model != juce::File())
-        {
-            chain.select (PedalCatalog::ampItem);
-            blocks.getAmpPage().modelSlot.loadFile (model);
-        }
-
-        if (ir != juce::File())
-        {
-            chain.select (cabBlock);
-            blocks.getCabPage().irSlot.loadFile (ir);
-        }
+        showPage (Page::library);
+        library.addSortedChecked (files);
     }
 
     /** Opens the Settings page over the chain strip and the block page, or closes it again. */

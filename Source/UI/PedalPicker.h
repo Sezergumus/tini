@@ -9,7 +9,7 @@
 
     Built-in    one card per built-in pedal (dot in its category colour, knob names, how many copies are
                 already in the chain).
-    Your library    the NAM captures in the Pedals folder of the library, with a search field, Add files,
+    Your library    the NAM captures in the Pedals folder of the library, with a search field, Add packs,
                 Open folder and drop-to-add. Picking one puts a NAM pedal named after that model into
                 the chain.
 
@@ -44,7 +44,7 @@ public:
         }
 
         library.setPickOnClick (true);
-        library.setEmptyText ("No pedal captures yet.\nDrop .nam files here or use Add files - the list follows the Pedals folder.");
+        library.setEmptyText ("No pedal captures yet.\nDrop .nam files here or use Add packs - the list follows the Pedals folder.");
         library.onPick = [this] (const juce::File& file) { pickFile (file); };
         library.isLoaded = [this] (const juce::File& file) { return inChain (file); };
         addAndMakeVisible (library);
@@ -57,7 +57,7 @@ public:
         searchBox.onTextChange = [this] { library.setSearch (searchBox.getText()); };
         addAndMakeVisible (searchBox);
 
-        addButton.setButtonText ("Add files");
+        addButton.setButtonText ("Add packs");
         addButton.setTooltip ("Copy .nam captures into the Pedals folder");
         addButton.onClick = [this] { chooseFilesToAdd(); };
         addAndMakeVisible (addButton);

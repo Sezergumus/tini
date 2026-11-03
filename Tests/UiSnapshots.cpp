@@ -1147,18 +1147,21 @@ void renderUiSnapshots (const juce::File& dir)
                     "the window accepts models and impulse responses only");
 
             view->filesDropped ({ outside.getChildFile ("cover.png").getFullPathName(), model.getFullPathName(), ir.getFullPathName() }, 10, 10);
-            waitForModel();
-            settleLoop (200);
+            settleLoop (300);
 
             const auto ampsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
             const auto irsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::cabs);
             report (ampsFolder.getChildFile ("Dropped Amp.nam").existsAsFile() && irsFolder.getChildFile ("Dropped Cab.wav").existsAsFile(),
                     "dropped files are copied into Amps and Cabs");
-            report (p.nam.getFile() == ampsFolder.getChildFile ("Dropped Amp.nam") && p.nam.hasModel(), "the dropped model is loaded from the library");
-            report (p.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f, "...and the amp switches to NAM");
-            report (p.loadedIrFile == irsFolder.getChildFile ("Dropped Cab.wav"), "the dropped impulse response is loaded into the cab");
-            report (blocks3.getShownBlock() == cabBlock, "the cab page is shown last");
+            report (! p.nam.hasModel() && p.loadedIrFile != irsFolder.getChildFile ("Dropped Cab.wav"), "...and nothing is loaded by itself");
+            report (view->getPage() == MainView::Page::library, "the Library opens on what was dropped");
 
+            auto& dropLib = view->getLibrary();
+            report (dropLib.getSection() == FileLibrary::Kind::amps && dropLib.getList().getNumHighlighted() == 1
+                        && dropLib.getList().getSelectedFile() == ampsFolder.getChildFile ("Dropped Amp.nam"),
+                    "...with the new file highlighted and selected");
+
+            view->showPage (MainView::Page::rig);
             p.unloadNamModel();
             setParam (p, "AMP_TYPE", 0.0f);
             view->getChain().select (PedalCatalog::ampItem);
@@ -1335,7 +1338,7 @@ void renderUiSnapshots (const juce::File& dir)
                 }
             }
 
-            // a pedal capture dropped on the window joins the chain
+            // a pedal capture dropped on the window is filed under Pedals and shown in the Library, not added to the chain
             {
                 auto text = pedalsFolder.getChildFile ("Green Drive.nam").loadFileAsString();
                 text = text.replace ("\"gear_type\": \"amp\"", "\"gear_type\": \"pedal\"");
@@ -1346,8 +1349,12 @@ void renderUiSnapshots (const juce::File& dir)
                 view->filesDropped ({ dropped.getFullPathName() }, 10, 10);
                 settleLoop (400);
                 report (pedalsFolder.getChildFile ("Dropped Pedal.nam").existsAsFile(), "a dropped model whose gear type is pedal lands in Pedals");
-                report (chainBar.getStrip().pedals.size() == before + 1 && p.pedalNam[1].getFile().getFileName() == "Dropped Pedal.nam",
-                        "...and joins the chain as a NAM pedal");
+                report (chainBar.getStrip().pedals.size() == before && view->getPage() == MainView::Page::library
+                            && view->getLibrary().getSection() == FileLibrary::Kind::pedals
+                            && view->getLibrary().getList().getSelectedFile().getFileName() == "Dropped Pedal.nam",
+                        "...the chain stays as it is and the Library shows the new pedal capture");
+                view->showPage (MainView::Page::rig);
+                settle();
             }
 
             for (int copy = 0; copy < PedalCatalog::namCopies; ++copy)
@@ -1415,6 +1422,7 @@ void renderUiSnapshots (const juce::File& dir)
                     "the sections show how many files they hold");
 
             auto& list = libPage.getList();
+            libPage.showSection (Kind::amps);   // an earlier drop left the Library on Pedals
 
             // (nothing paints in these tests until a snapshot is taken: ask for the details now so they have been read by then)
             auto readDetails = [&]
@@ -1592,6 +1600,25 @@ void renderUiSnapshots (const juce::File& dir)
                     for (int i = list.getNumFiles(); --i >= 0;)
                         if (list.getFile (i).getFileName() != "Fresh Fuzz.nam" && list.getFile (i).getFileName().startsWith ("Fresh Fuzz"))
                             list.deleteFile (list.getFile (i));
+                }
+
+                // a whole pack can be deleted at once
+                {
+                    const int baseline = list.getNumFiles();
+                    const auto src1 = outside.getChildFile ("Pack One.nam"), src2 = outside.getChildFile ("Pack Two.nam");
+                    testModels.getChildFile ("test_wavenet.nam").copyFileTo (src1);
+                    testModels.getChildFile ("test_a2.nam").copyFileTo (src2);
+                    FileLibrary::importFile (src1, Kind::pedals, "Doomed Pack");
+                    FileLibrary::importFile (src2, Kind::pedals, "Doomed Pack");
+                    list.rescan();
+                    report (list.getNumFiles() == baseline + 2, "a pack's files are listed (" + juce::String (list.getNumFiles()) + ")");
+
+                    const auto old = FileLibrary::useTrash();
+                    FileLibrary::useTrash() = false;
+                    report (list.deletePack ("Doomed Pack") == 0 && list.getNumFiles() == baseline
+                                && ! pedalsFolder.getChildFile ("Doomed Pack").exists(),
+                            "deleting a pack removes its files and its folder");
+                    FileLibrary::useTrash() = old;
                 }
 
                 // Tidy up works in the background and shows it
@@ -1882,10 +1909,11 @@ void renderUiSnapshots (const juce::File& dir)
                     "a flat string shows its note and how far off it is: " + tuner->getNoteName() + juce::String (tuner->getOctave()) + " " + juce::String (tuner->getCents(), 1));
             save (*editor, dir.getChildFile ("ui_tuner_flat.png"));
 
+            report (p.isTunerMuted() && tuner->getMuteSwitch().getToggleState(), "the tuner opens muted the first time");
+            save (*editor, dir.getChildFile ("ui_tuner_muted.png"));
             tuner->getMuteSwitch().triggerClick();
             settleLoop (50);
-            report (p.isTunerMuted(), "the Mute switch mutes the output");
-            save (*editor, dir.getChildFile ("ui_tuner_muted.png"));
+            report (! p.isTunerMuted() && ! p.getTunerMuteDefault(), "the Mute switch lifts the mute and remembers that");
 
             // the string stops: after a moment the note goes away
             settleLoop (1800);
@@ -1905,6 +1933,14 @@ void renderUiSnapshots (const juce::File& dir)
         footer.getTunerButton().triggerClick();
         settleLoop (100);
         report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && ! p.isTunerActive(), "the Tuner button toggles the tuner");
+
+        // the mute switch was turned off by the user: it stays off the next time
+        footer.getTunerButton().triggerClick();
+        settleLoop (100);
+        report (p.isTunerActive() && ! p.isTunerMuted(), "the tuner opens unmuted once the user turned the mute off");
+        footer.getTunerButton().triggerClick();
+        settleLoop (100);
+        p.setTunerMuteDefault (true);
     }
     else
     {
