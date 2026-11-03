@@ -17,9 +17,12 @@
     Rig: a header (name, presets, settings), the chain strip, the page of the block that is selected
     in the strip, and a footer with the in / out meters and the audio device.
 
+    Models (.nam) and impulse responses dropped anywhere on the window are copied into the library
+    (Documents/tini) and loaded: a model into the amp, an impulse response into the cab.
+
     In the standalone the header is also the title bar: dragging it moves the window, a double click
     fits it to the screen, and minimise / fit / close buttons sit at its right end (StandaloneHooks). */
-class MainView : public juce::Component, private juce::Timer
+class MainView : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
     explicit MainView (NeuralFlowAmpAudioProcessor& p)
@@ -68,6 +71,15 @@ public:
     {
         stopTimer();
         setLookAndFeel (nullptr);
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (dropHighlight)
+        {
+            g.setColour (Theme::accent.withAlpha (0.8f));
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (3.0f), 10.0f, 2.0f);
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -135,6 +147,68 @@ public:
         if (StandaloneHooks::controller().available() && e.getPosition().y < headerH)
             if (auto& toggle = StandaloneHooks::controller().toggleMaximise)
                 toggle();
+    }
+
+    //==========================================================================
+    // Files dragged from the file manager. A list inside the window that takes the same kind of file
+    // (the model / IR browser) gets the drop first and only adds it to the library.
+    bool isInterestedInFileDrag (const juce::StringArray& paths) override
+    {
+        for (const auto& path : paths)
+        {
+            FileLibrary::Kind kind;
+            if (FileLibrary::kindOfFile (juce::File (path), kind))
+                return true;
+        }
+        return false;
+    }
+
+    void fileDragEnter (const juce::StringArray&, int, int) override { setDropHighlight (true); }
+    void fileDragExit (const juce::StringArray&) override            { setDropHighlight (false); }
+
+    void filesDropped (const juce::StringArray& paths, int, int) override
+    {
+        setDropHighlight (false);
+
+        juce::Array<juce::File> files;
+        for (const auto& path : paths)
+            files.add (juce::File (path));
+
+        importAndLoad (files);
+    }
+
+    /** Copies models and impulse responses into the library and loads the first of each: the model into
+        the amp (and switches the amp to NAM), the impulse response into the cab. Other files are ignored. */
+    void importAndLoad (const juce::Array<juce::File>& files)
+    {
+        juce::File model, ir;
+
+        for (const auto& file : files)
+        {
+            FileLibrary::Kind kind;
+            if (! FileLibrary::kindOfFile (file, kind))
+                continue;
+
+            auto imported = FileLibrary::importFile (file, kind);
+            if (! imported.existsAsFile())
+                imported = file;   // the library could not be written: use the file where it is
+
+            auto& first = kind == FileLibrary::Kind::irs ? ir : model;
+            if (first == juce::File())
+                first = imported;
+        }
+
+        if (model != juce::File())
+        {
+            chain.select (PedalCatalog::ampItem);
+            blocks.getAmpPage().modelSlot.loadFile (model);
+        }
+
+        if (ir != juce::File())
+        {
+            chain.select (cabBlock);
+            blocks.getCabPage().irSlot.loadFile (ir);
+        }
     }
 
     /** Opens the Settings page over the chain strip and the block page, or closes it again. */
@@ -219,6 +293,16 @@ private:
                  closeButton    { WindowButton::Kind::close };
     juce::ComponentDragger dragger;
     bool dragging = false;
+    bool dropHighlight = false;
+
+    void setDropHighlight (bool on)
+    {
+        if (dropHighlight != on)
+        {
+            dropHighlight = on;
+            repaint();
+        }
+    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainView)
 };

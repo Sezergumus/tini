@@ -74,6 +74,11 @@ void renderUiSnapshots (const juce::File& dir)
 {
     dir.createDirectory();
 
+    // the library lives in a temporary folder, never in the user's real Documents/tini
+    FileLibrary::rootOverride() = dir.getChildFile ("tini_library_tmp");
+    FileLibrary::rootOverride().deleteRecursively();
+    FileLibrary::useTrash() = false;
+
     NeuralFlowAmpAudioProcessor p;
     const auto presetFolder = dir.getChildFile ("presets_tmp");   // never touch the user's real presets
     presetFolder.deleteRecursively();
@@ -866,6 +871,201 @@ void renderUiSnapshots (const juce::File& dir)
         blocks->show (PedalCatalog::ampItem);
         settle();
         libDir.deleteRecursively();
+    }
+
+    //==========================================================================
+    // Library: Documents/tini/{Amps,Pedals,IRs} is watched live, files can be added, renamed and deleted
+    // from the list, and files dropped on the window are copied in and loaded.
+    if (auto* view = findFirst<MainView> (*editor))
+    {
+        auto& blocks3 = view->getBlocks();
+        const auto testModels = juce::File (__FILE__).getParentDirectory().getChildFile ("models");
+        const auto outside = dir.getChildFile ("outside_tmp");   // where "downloads" come from
+        outside.deleteRecursively();
+        outside.createDirectory();
+
+        auto waitForModel = [&]
+        {
+            for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+                settleLoop (10);
+            settle();
+        };
+
+        FileLibrary::rootOverride().deleteRecursively();
+        report (! FileLibrary::libraryFolder (FileLibrary::Kind::amps).exists(), "the test library starts empty");
+
+        // a list that shows the library folder follows it while it is visible
+        {
+            FileBrowserList list (FileLibrary::Kind::amps);
+            list.setBounds (0, 0, 300, 400);
+            list.setVisible (true);
+            settleLoop (50);
+
+            const auto amps = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
+            report (amps.isDirectory() && FileLibrary::libraryFolder (FileLibrary::Kind::pedals).isDirectory()
+                        && FileLibrary::libraryFolder (FileLibrary::Kind::irs).isDirectory(),
+                    "showing a list creates the Amps, Pedals and IRs folders");
+            report (list.getFolder() == amps && list.getNumFiles() == 0, "an empty library shows an empty list");
+
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (amps.getChildFile ("One.nam"));
+            list.refreshIfChanged();
+            report (list.getNumFiles() == 1, "a file copied in with the file manager shows up");
+
+            testModels.getChildFile ("test_a2.nam").copyFileTo (amps.getChildFile ("Two.nam"));
+            amps.getChildFile ("readme.txt").replaceWithText ("x");
+            settleLoop (1300);   // the list polls the folder about once a second
+            report (list.getNumFiles() == 2, "...and the list notices by itself (" + juce::String (list.getNumFiles()) + ")");
+
+            amps.getChildFile ("One.nam").deleteFile();
+            list.refreshIfChanged();
+            report (list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Two.nam", "a file removed with the file manager disappears");
+
+            // Add files: copies from anywhere
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (outside.getChildFile ("Fresh.nam"));
+            outside.getChildFile ("cover.png").replaceWithText ("x");
+            const int added = list.addFiles ({ outside.getChildFile ("Fresh.nam"), outside.getChildFile ("cover.png") });
+            report (added == 1 && amps.getChildFile ("Fresh.nam").existsAsFile() && list.getNumFiles() == 2,
+                    "Add files copies models in and skips other files");
+            report (outside.getChildFile ("Fresh.nam").existsAsFile(), "...the original stays where it was");
+
+            // dropping on the list does the same
+            testModels.getChildFile ("test_a2.nam").copyFileTo (outside.getChildFile ("Dropped.nam"));
+            report (list.isInterestedInFileDrag ({ outside.getChildFile ("Dropped.nam").getFullPathName() }), "the list accepts .nam files");
+            report (! list.isInterestedInFileDrag ({ outside.getChildFile ("cover.png").getFullPathName() }), "...and nothing else");
+            list.filesDropped ({ outside.getChildFile ("Dropped.nam").getFullPathName() }, 0, 0);
+            report (list.getNumFiles() == 3, "a file dropped on the list is added to it");
+
+            // rename keeps the extension and refuses a name in use
+            juce::File renamedTo;
+            bool renamedCalled = false;
+            list.onRenamed = [&] (const juce::File&, const juce::File& n) { renamedCalled = true; renamedTo = n; };
+            auto renameResult = list.renameFile (amps.getChildFile ("Fresh.nam"), "Clean: Fender?");
+            report (renameResult.wasOk() && renamedCalled && renamedTo.getFileExtension() == ".nam" && renamedTo.existsAsFile()
+                        && ! amps.getChildFile ("Fresh.nam").exists(),
+                    "Rename moves the file and keeps the extension (" + renamedTo.getFileName() + ")");
+            report (list.renameFile (renamedTo, "Two").failed(), "Rename refuses a name that is in use");
+            report (list.renameFile (renamedTo, "   ").failed(), "Rename refuses an empty name");
+
+            // delete
+            bool deletedCalled = false;
+            list.onDeleted = [&] (const juce::File&) { deletedCalled = true; };
+            report (list.deleteFile (renamedTo) && deletedCalled && ! renamedTo.exists() && list.getNumFiles() == 2,
+                    "Delete removes the file and updates the list");
+
+            // a list stays on the folder of the loaded file, until files are added to the library
+            list.setCurrentFile (outside.getChildFile ("Fresh.nam"));
+            report (list.getFolder() == outside, "a loaded file outside the library shows its own folder");
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (outside.getChildFile ("Late.nam"));
+            list.addFiles ({ outside.getChildFile ("Late.nam") });
+            report (list.getFolder() == amps, "...but adding files shows the library, where they went");
+        }
+
+        // legacy folder: "Models" is renamed to "Amps" once, saved paths follow
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            const auto legacy = FileLibrary::root().getChildFile ("Models");
+            legacy.createDirectory();
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (legacy.getChildFile ("Old.nam"));
+            const auto oldPath = legacy.getChildFile ("Old.nam");
+
+            FileLibrary::ensureFolders();
+            report (! legacy.exists() && FileLibrary::libraryFolder (FileLibrary::Kind::amps).getChildFile ("Old.nam").existsAsFile(),
+                    "an older Models folder becomes Amps");
+            report (FileLibrary::resolveSaved (oldPath) == FileLibrary::libraryFolder (FileLibrary::Kind::amps).getChildFile ("Old.nam"),
+                    "...and a path saved by the old version still finds its model");
+
+            // the session of an older version loads its model from the new place
+            juce::MemoryBlock state;
+            p.getStateInformation (state);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("namPath", oldPath.getFullPathName());
+                juce::MemoryBlock patched;
+                juce::AudioProcessor::copyXmlToBinary (*xml, patched);
+                p.setStateInformation (patched.getData(), (int) patched.getSize());
+                waitForModel();
+                report (p.nam.getFile().getFileName() == "Old.nam" && p.nam.hasModel(), "a saved session finds the model in Amps");
+            }
+            p.unloadNamModel();
+        }
+
+        // import rules
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            const auto src = outside.getChildFile ("Dup.nam");
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (src);
+
+            const auto first = FileLibrary::importFile (src, FileLibrary::Kind::amps);
+            report (first.existsAsFile() && first.getParentDirectory() == FileLibrary::libraryFolder (FileLibrary::Kind::amps),
+                    "import copies into the library");
+            report (FileLibrary::importFile (src, FileLibrary::Kind::amps) == first, "importing the same file again reuses the copy");
+            report (FileLibrary::importFile (first, FileLibrary::Kind::amps) == first, "a file already in the library is left alone");
+
+            const auto other = outside.getChildFile ("Other");
+            other.createDirectory();
+            const auto different = other.getChildFile ("Dup.nam");
+            testModels.getChildFile ("test_a2.nam").copyFileTo (different);
+            const auto second = FileLibrary::importFile (different, FileLibrary::Kind::amps);
+            report (second.existsAsFile() && second != first && second.getFileName().startsWith ("Dup"),
+                    "a different file with the same name gets its own copy (" + second.getFileName() + ")");
+
+            FileLibrary::Kind kind;
+            report (FileLibrary::kindOfFile (juce::File ("x.NAM"), kind) && kind == FileLibrary::Kind::amps, ".nam belongs to the amp library");
+            report (FileLibrary::kindOfFile (juce::File ("x.wav"), kind) && kind == FileLibrary::Kind::irs, ".wav belongs to the IR library");
+            report (! FileLibrary::kindOfFile (juce::File ("x.png"), kind), "other files belong nowhere");
+        }
+
+        // dropped on the window: copied in and loaded
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            setParam (p, "AMP_TYPE", 0.0f);
+            p.unloadNamModel();
+            view->getChain().select (PedalCatalog::ampItem);
+
+            const auto model = outside.getChildFile ("Dropped Amp.nam");
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (model);
+
+            auto ir = outside.getChildFile ("Dropped Cab.wav");
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::FileOutputStream> out (ir.createOutputStream());
+                std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (out.get(), 48000.0, 1, 16, {}, 0));
+                if (writer != nullptr)
+                {
+                    out.release();
+                    juce::AudioBuffer<float> spike (1, 64);
+                    spike.clear();
+                    spike.setSample (0, 0, 1.0f);
+                    writer->writeFromAudioSampleBuffer (spike, 0, 64);
+                }
+            }
+
+            report (view->isInterestedInFileDrag ({ model.getFullPathName() }) && view->isInterestedInFileDrag ({ ir.getFullPathName() })
+                        && ! view->isInterestedInFileDrag ({ outside.getChildFile ("cover.png").getFullPathName() }),
+                    "the window accepts models and impulse responses only");
+
+            view->filesDropped ({ outside.getChildFile ("cover.png").getFullPathName(), model.getFullPathName(), ir.getFullPathName() }, 10, 10);
+            waitForModel();
+            settleLoop (200);
+
+            const auto ampsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
+            const auto irsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::irs);
+            report (ampsFolder.getChildFile ("Dropped Amp.nam").existsAsFile() && irsFolder.getChildFile ("Dropped Cab.wav").existsAsFile(),
+                    "dropped files are copied into Amps and IRs");
+            report (p.nam.getFile() == ampsFolder.getChildFile ("Dropped Amp.nam") && p.nam.hasModel(), "the dropped model is loaded from the library");
+            report (p.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f, "...and the amp switches to NAM");
+            report (p.loadedIrFile == irsFolder.getChildFile ("Dropped Cab.wav"), "the dropped impulse response is loaded into the cab");
+            report (blocks3.getShownBlock() == cabBlock, "the cab page is shown last");
+
+            p.unloadNamModel();
+            setParam (p, "AMP_TYPE", 0.0f);
+            view->getChain().select (PedalCatalog::ampItem);
+            settle();
+        }
+
+        FileLibrary::rootOverride().deleteRecursively();
+        outside.deleteRecursively();
     }
 
     //==========================================================================

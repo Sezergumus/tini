@@ -8,6 +8,7 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "LibraryPaths.h"
 
 //==============================================================================
 NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
@@ -497,8 +498,12 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
     if (preset.irPath.isNotEmpty())
         loadImpulseResponse (juce::File (preset.irPath));   // ignored if the file is gone
 
-    if (preset.namPath.isNotEmpty() && juce::File (preset.namPath).existsAsFile())
-        loadNamModel (juce::File (preset.namPath));
+    if (preset.namPath.isNotEmpty())
+    {
+        const auto namFile = FileLibrary::resolveSaved (juce::File (preset.namPath));
+        if (namFile.existsAsFile())
+            loadNamModel (namFile);
+    }
 
     currentPresetName = preset.name;
     if (index < presets.getNumFactory())
@@ -622,7 +627,8 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
     if (irFile.existsAsFile())
         loadImpulseResponse(irFile);
 
-    const juce::File namFile(state.getProperty("namPath").toString());
+    // (a path from an older version may point into the old "Models" folder, now "Amps")
+    const juce::File namFile = FileLibrary::resolveSaved(juce::File(state.getProperty("namPath").toString()));
     if (namFile.existsAsFile())
         loadNamModel(namFile);
     else

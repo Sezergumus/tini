@@ -144,7 +144,7 @@ private:
     /** The model before / after the loaded one in its folder. */
     void step (int delta)
     {
-        const auto file = FileLibrary::neighbour (processor.nam.getFile(), true, delta);
+        const auto file = FileLibrary::neighbour (processor.nam.getFile(), FileLibrary::Kind::amps, delta);
         if (file.existsAsFile() && file != processor.nam.getFile())
             loadFile (file);
     }
@@ -152,18 +152,24 @@ private:
     void chooseFile()
     {
         const auto current = processor.nam.getFile();
+        const auto library = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
         fileChooser = std::make_unique<juce::FileChooser> ("Select a Neural Amp Modeler model (.nam)",
-                                                           current.existsAsFile()
-                                                               ? current.getParentDirectory()
-                                                               : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                           current.existsAsFile() ? current.getParentDirectory()
+                                                           : library.isDirectory() ? library
+                                                           : FileLibrary::downloadsFolder(),
                                                            "*.nam");
 
         const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<ModelSlot> (this)] (const juce::FileChooser& fc)
         {
-            if (safe != nullptr)
-                safe->loadFile (fc.getResult());
+            // a model from anywhere is copied into the library first, so the list and arrows find it
+            const auto picked = fc.getResult();
+            if (safe != nullptr && picked.existsAsFile())
+            {
+                const auto imported = FileLibrary::importFile (picked, FileLibrary::Kind::amps);
+                safe->loadFile (imported.existsAsFile() ? imported : picked);
+            }
         });
     }
 
@@ -263,25 +269,31 @@ private:
     /** The impulse response before / after the loaded one in its folder. */
     void step (int delta)
     {
-        const auto file = FileLibrary::neighbour (processor.loadedIrFile, false, delta);
+        const auto file = FileLibrary::neighbour (processor.loadedIrFile, FileLibrary::Kind::irs, delta);
         if (file.existsAsFile() && file != processor.loadedIrFile)
             loadFile (file);
     }
 
     void chooseFile()
     {
+        const auto library = FileLibrary::libraryFolder (FileLibrary::Kind::irs);
         fileChooser = std::make_unique<juce::FileChooser> ("Select an impulse response (.wav)",
-                                                           processor.loadedIrFile.existsAsFile()
-                                                               ? processor.loadedIrFile.getParentDirectory()
-                                                               : juce::File::getSpecialLocation (juce::File::userDesktopDirectory),
-                                                           "*.wav;*.aif;*.aiff");
+                                                           processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getParentDirectory()
+                                                           : library.isDirectory() ? library
+                                                           : FileLibrary::downloadsFolder(),
+                                                           FileLibrary::irWildcard);
 
         const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<IrSlot> (this)] (const juce::FileChooser& fc)
         {
-            if (safe != nullptr)
-                safe->loadFile (fc.getResult());
+            // an impulse response from anywhere is copied into the library first
+            const auto picked = fc.getResult();
+            if (safe != nullptr && picked.existsAsFile())
+            {
+                const auto imported = FileLibrary::importFile (picked, FileLibrary::Kind::irs);
+                safe->loadFile (imported.existsAsFile() ? imported : picked);
+            }
         });
     }
 
@@ -359,6 +371,11 @@ public:
         addChildComponent (modelSlot);
 
         browser.onPick = [this] (const juce::File& file) { modelSlot.loadFile (file); };
+        browser.onRenamed = [this] (const juce::File& oldFile, const juce::File& newFile)
+        {
+            if (processor.nam.getFile() == oldFile)
+                processor.loadNamModel (newFile);   // keep the loaded model; only its path changed
+        };
         addChildComponent (browser);
 
         refresh();
@@ -459,7 +476,7 @@ public:
     // exposed so tests can drive them
     juce::TextButton builtInButton, namButton;
     ModelSlot modelSlot;
-    FileBrowserList browser { true };
+    FileBrowserList browser { FileLibrary::Kind::amps };
 
 private:
     static constexpr int browserWidth = 300;
@@ -598,6 +615,11 @@ public:
 
         irSlot.onBrowseToggled = [this] { resized(); refresh(); };
         browser.onPick = [this] (const juce::File& file) { irSlot.loadFile (file); };
+        browser.onRenamed = [this] (const juce::File& oldFile, const juce::File& newFile)
+        {
+            if (processor.loadedIrFile == oldFile)
+                processor.loadImpulseResponse (newFile);
+        };
         addAndMakeVisible (browser);
     }
 
@@ -635,7 +657,7 @@ public:
     }
 
     IrSlot irSlot;
-    FileBrowserList browser { false };
+    FileBrowserList browser { FileLibrary::Kind::irs };
 
 private:
     NeuralFlowAmpAudioProcessor& processor;
