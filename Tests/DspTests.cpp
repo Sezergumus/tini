@@ -1044,6 +1044,168 @@ namespace
     }
 }
 
+namespace
+{
+    std::vector<float> makeSine (double freq, double fs, int n, float amp = 0.3f, double phase = 0.0)
+    {
+        std::vector<float> v ((size_t) n);
+        for (int i = 0; i < n; ++i)
+            v[(size_t) i] = amp * (float) std::sin (juce::MathConstants<double>::twoPi * freq * (double) i / fs + phase);
+        return v;
+    }
+
+    float centsBetween (double measured, double expected) { return (float) (1200.0 * std::log2 (measured / expected)); }
+
+    void testTuner()
+    {
+        std::printf ("\n-- tuner --\n");
+
+        PitchDetector detector;
+
+        // pure tones across the guitar and bass range, at the common sample rates
+        for (double fs : { 44100.0, 48000.0, 96000.0 })
+        {
+            const int n = PitchDetector::samplesNeeded (fs) + 777;
+            for (double f : { 41.20, 82.41, 110.0, 196.0, 329.63, 440.0, 987.77 })
+            {
+                auto sine = makeSine (f, fs, n);
+                const auto r = detector.detect (sine.data(), n, fs);
+                check (r.valid() && std::abs (centsBetween (r.frequency, f)) < 1.0f,
+                       juce::String (f, 2) + " Hz at " + juce::String (fs / 1000.0, 1) + " kHz is read within 1 cent ("
+                           + juce::String (r.frequency, 3) + " Hz, " + juce::String (centsBetween (r.frequency, f), 2) + " cents)");
+            }
+        }
+
+        // a note that is 10 cents sharp
+        {
+            const double f = 440.0 * std::pow (2.0, 10.0 / 1200.0);
+            auto sine = makeSine (f, 48000.0, 6000);
+            const auto r = detector.detect (sine.data(), (int) sine.size(), 48000.0);
+            const auto note = PitchDetector::describe (r.frequency, 440.0f);
+            check (r.valid() && note.name == "A" && note.octave == 4 && std::abs (note.cents - 10.0f) < 1.0f,
+                   "+10 cents: " + note.name + juce::String (note.octave) + " " + juce::String (note.cents, 2) + " cents");
+        }
+
+        // a guitar string is not a sine: strong harmonics (the second one louder than the first) must not fool it
+        {
+            const double f = 110.0, fs = 48000.0;
+            const int n = 6000;
+            std::vector<float> v ((size_t) n, 0.0f);
+            const float amps[] = { 0.15f, 0.30f, 0.20f, 0.10f, 0.05f };
+            for (int h = 0; h < 5; ++h)
+            {
+                auto part = makeSine (f * (h + 1), fs, n, amps[h], 0.7 * h);
+                for (int i = 0; i < n; ++i)
+                    v[(size_t) i] += part[(size_t) i];
+            }
+            const auto r = detector.detect (v.data(), n, fs);
+            check (r.valid() && std::abs (centsBetween (r.frequency, f)) < 2.0f,
+                   "a loud second harmonic does not change the answer: " + juce::String (r.frequency, 2) + " Hz");
+        }
+
+        // noise and silence have no pitch
+        {
+            juce::Random random (42);
+            std::vector<float> noise (6000);
+            for (auto& x : noise)
+                x = 0.3f * (random.nextFloat() * 2.0f - 1.0f);
+            const auto r = detector.detect (noise.data(), (int) noise.size(), 48000.0);
+            check (! r.valid() || r.confidence < 0.8f, "white noise has no clear pitch (confidence " + juce::String (r.confidence, 2) + ")");
+
+            std::vector<float> silence (6000, 0.0f);
+            check (! detector.detect (silence.data(), (int) silence.size(), 48000.0).valid(), "silence has no pitch");
+
+            auto quiet = makeSine (196.0, 48000.0, 6000, 0.0005f);
+            check (! detector.detect (quiet.data(), (int) quiet.size(), 48000.0).valid(), "a signal below the noise floor is ignored");
+
+            auto few = makeSine (196.0, 48000.0, 500);
+            check (! detector.detect (few.data(), (int) few.size(), 48000.0).valid(), "too few samples give no answer");
+        }
+
+        // note names
+        {
+            auto e2 = PitchDetector::describe (82.41f);
+            auto c4 = PitchDetector::describe (261.63f);
+            auto g3 = PitchDetector::describe (196.0f);
+            auto a4at432 = PitchDetector::describe (432.0f, 432.0f);
+            check (e2.name == "E" && e2.octave == 2 && std::abs (e2.cents) < 1.0f, "82.41 Hz is E2");
+            check (c4.name == "C" && c4.octave == 4, "261.63 Hz is C4");
+            check (g3.name == "G" && g3.octave == 3, "196 Hz is G3");
+            check (a4at432.name == "A" && a4at432.octave == 4 && std::abs (a4at432.cents) < 0.01f, "the reference pitch moves the scale (A4 = 432 Hz)");
+            check (PitchDetector::describe (466.16f).name == "A#", "sharps are named with #");
+        }
+
+        // the processor FIFO: nothing is copied while the tuner is closed
+        {
+            Prepared pr;
+            auto& p = pr.proc;
+            float scratch[4096];
+
+            long position = 0;   // the sine continues across calls
+            auto feed = [&] (double f, int blocks)
+            {
+                auto out = run (p, blocks, [&] (int b, juce::AudioBuffer<float>& buf)
+                {
+                    auto sine = makeSine (f, sampleRate, blockSize, 0.25f, juce::MathConstants<double>::twoPi * f * (double) (position + (long) b * blockSize) / sampleRate);
+                    for (int ch = 0; ch < 2; ++ch)
+                        buf.copyFrom (ch, 0, sine.data(), blockSize);
+                });
+                position += (long) blocks * blockSize;
+                return out;
+            };
+
+            feed (196.0, 4);
+            check (p.readTunerSamples (scratch, 4096) == 0, "the tuner FIFO stays empty while the tuner is closed");
+
+            p.setTunerActive (true);
+            check (p.isTunerActive(), "the tuner can be switched on");
+            feed (196.0, 4);
+            const int got = p.readTunerSamples (scratch, 4096);
+            check (got == 4 * blockSize, "an open tuner collects the input (" + juce::String (got) + " samples)");
+
+            // end to end: the samples the UI reads give the right note
+            std::vector<float> window;
+            for (int i = 0; i < 12; ++i)
+            {
+                feed (196.0, 1);
+                const int n = p.readTunerSamples (scratch, 4096);
+                window.insert (window.end(), scratch, scratch + n);
+            }
+            const auto r = detector.detect (window.data(), (int) window.size(), sampleRate);
+            const auto note = PitchDetector::describe (r.frequency);
+            check (r.valid() && note.name == "G" && note.octave == 3 && std::abs (note.cents) < 3.0f,
+                   "the FIFO feeds the detector: " + note.name + juce::String (note.octave) + " " + juce::String (note.cents, 2) + " cents");
+
+            // mute silences the output only while the tuner is open
+            auto loud = feed (196.0, 2);
+            check (loud.getMagnitude (0, 0, loud.getNumSamples()) > 0.001f, "the output is audible by default");
+
+            p.setTunerMute (true);
+            auto muted = feed (196.0, 2);
+            check (muted.getMagnitude (0, 0, muted.getNumSamples()) == 0.0f, "Mute silences the output while the tuner is open");
+
+            p.setTunerActive (false);
+            check (! p.isTunerMuted(), "closing the tuner lifts the mute");
+            auto after = feed (196.0, 2);
+            check (after.getMagnitude (0, 0, after.getNumSamples()) > 0.001f, "...and the output is audible again");
+
+            p.setTunerMute (true);   // a stray mute without the tuner must not silence anything
+            auto stray = feed (196.0, 2);
+            check (stray.getMagnitude (0, 0, stray.getNumSamples()) > 0.001f, "mute has no effect while the tuner is closed");
+            p.setTunerMute (false);
+
+            // a slow reader loses the newest samples but the FIFO never overruns
+            p.setTunerActive (true);
+            feed (196.0, 100);
+            check (p.readTunerSamples (scratch, 4096) == 4096, "a backed-up FIFO still delivers whole reads");
+            p.setTunerActive (false);
+            p.setTunerActive (true);
+            check (p.readTunerSamples (scratch, 4096) == 0, "switching the tuner on starts with an empty FIFO");
+            p.setTunerActive (false);
+        }
+    }
+}
+
 void renderUiSnapshots (const juce::File& dir);   // Tests/UiSnapshots.cpp
 
 int main (int argc, char** argv)
@@ -1068,6 +1230,7 @@ int main (int argc, char** argv)
     testPedalCopies();
     testPresets();
     testPresetEditing();
+    testTuner();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

@@ -4,6 +4,7 @@
 #include "Crunch.h"
 #include "DSP/StereoDelay.h"
 #include "DSP/NamEngine.h"
+#include "DSP/PitchDetector.h"
 #include "PedalCatalog.h"
 #include "PresetManager.h"
 
@@ -57,6 +58,18 @@ public:
     std::atomic<float> outputPeak{ 0.0f };
 
     void loadImpulseResponse(const juce::File& file);
+
+    //==============================================================================
+    // Tuner. While the tuner page is open the UI switches it on: only then is the guitar input (channel
+    // 1) copied into a lock-free FIFO that the UI reads, and the output can be muted. Nothing runs
+    // while the tuner is closed.
+    void setTunerActive(bool on);
+    bool isTunerActive() const { return tunerActive.load(); }
+    void setTunerMute(bool on) { tunerMute.store(on); }
+    bool isTunerMuted() const { return tunerMute.load(); }
+
+    /** Message thread: moves up to `maxSamples` of the newest input (oldest first) into `dest`. */
+    int readTunerSamples(float* dest, int maxSamples);
 
     /** Reference pitch of the tuner (A4, 415..466 Hz). A setting of the session, not part of a preset. */
     float getTunerReferenceHz() const { return tunerReferenceHz.load(); }
@@ -132,6 +145,12 @@ private:
     std::atomic<float>* namNormParam = nullptr;
 
     std::atomic<float> tunerReferenceHz{ 440.0f };
+
+    static constexpr int tunerFifoSize = 32768;
+    juce::AbstractFifo tunerFifo { tunerFifoSize };
+    std::array<float, tunerFifoSize> tunerBuffer {};
+    std::atomic<bool> tunerActive { false }, tunerMute { false };
+    void pushTunerSamples(const float* samples, int numSamples);
 
     juce::String currentPresetName; // empty = untitled
     int currentProgram = 0;         // factory preset last reported to the host

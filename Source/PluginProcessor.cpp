@@ -206,6 +206,10 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
 	storePeakMax(inputPeak, buffer.getMagnitude(0, buffer.getNumSamples()));
 
+    const bool tunerOn = tunerActive.load(std::memory_order_relaxed);
+    if (tunerOn && buffer.getNumChannels() > 0)
+        pushTunerSamples(buffer.getReadPointer(0), buffer.getNumSamples());
+
 	// 2. JUCE DSP AUDIO BLOCK
     juce::dsp::AudioBlock<float> block(buffer);
     juce::dsp::ProcessContextReplacing<float> context(block);
@@ -228,6 +232,9 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 	auto currentMaster = apvts.getRawParameterValue("MASTER")->load();
 	float masterGain = currentMaster / 10.0f;
 	buffer.applyGain(masterGain);
+
+    if (tunerOn && tunerMute.load(std::memory_order_relaxed))
+        buffer.clear();
 
 	storePeakMax(outputPeak, buffer.getMagnitude(0, buffer.getNumSamples()));
 }
@@ -404,6 +411,58 @@ void NeuralFlowAmpAudioProcessor::setChainOrder (const PedalCatalog::ChainOrder&
 
     const juce::SpinLock::ScopedLockType lock(chainLock);
     chainOrder = order;
+}
+
+//==============================================================================
+void NeuralFlowAmpAudioProcessor::setTunerActive (bool on)
+{
+    if (on)
+    {
+        // start from fresh input: throw away what a previous tuner session left in the FIFO
+        while (tunerFifo.getNumReady() > 0)
+            tunerFifo.finishedRead(tunerFifo.getNumReady());
+    }
+    else
+    {
+        tunerMute.store(false);
+    }
+
+    tunerActive.store(on);
+}
+
+void NeuralFlowAmpAudioProcessor::pushTunerSamples (const float* samples, int numSamples)
+{
+    const int n = juce::jmin(numSamples, tunerFifo.getFreeSpace());   // the newest samples are dropped when the UI is behind
+    if (n <= 0)
+        return;
+
+    int start1, size1, start2, size2;
+    tunerFifo.prepareToWrite(n, start1, size1, start2, size2);
+
+    if (size1 > 0)
+        std::copy(samples, samples + size1, tunerBuffer.begin() + start1);
+    if (size2 > 0)
+        std::copy(samples + size1, samples + size1 + size2, tunerBuffer.begin() + start2);
+
+    tunerFifo.finishedWrite(size1 + size2);
+}
+
+int NeuralFlowAmpAudioProcessor::readTunerSamples (float* dest, int maxSamples)
+{
+    const int n = juce::jmin(maxSamples, tunerFifo.getNumReady());
+    if (n <= 0)
+        return 0;
+
+    int start1, size1, start2, size2;
+    tunerFifo.prepareToRead(n, start1, size1, start2, size2);
+
+    if (size1 > 0)
+        std::copy(tunerBuffer.begin() + start1, tunerBuffer.begin() + start1 + size1, dest);
+    if (size2 > 0)
+        std::copy(tunerBuffer.begin() + start2, tunerBuffer.begin() + start2 + size2, dest + size1);
+
+    tunerFifo.finishedRead(size1 + size2);
+    return size1 + size2;
 }
 
 //==============================================================================
