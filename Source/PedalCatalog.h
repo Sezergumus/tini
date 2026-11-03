@@ -9,34 +9,31 @@
     (before or after the amp), and that order is kept by the processor (see ChainOrder). */
 namespace PedalCatalog
 {
-    /** Number of pedals in all(). The amp itself is item number `count` in a chain order. */
+    /** Number of pedal types in all(). */
     constexpr int count = 7;
-    constexpr int ampItem = count;
-    constexpr int numItems = count + 1;
 
+    /** How many copies of each pedal type can be in the chain at once. Every copy has its own
+        parameters, created up front (copy 0 keeps the plain ids, copy n >= 1 gets a "_<n+1>"
+        suffix), so host automation keeps working while the chain itself stays dynamic. */
+    constexpr int maxCopies = 3;
+
+    /** Chain items are numbered copy * count + type. The amp is the last item. */
+    constexpr int ampItem = count * maxCopies;
+    constexpr int numItems = ampItem + 1;
+
+    /** A chain order lists every item once. Items whose pedal is not "added" are parked in it
+        and skipped by the processor and the UI. */
     using ChainOrder = std::array<int, numItems>;
 
-    /** Packs / unpacks a chain order (4 bits per item) so it can be handed to the audio thread atomically. */
-    inline juce::uint32 packOrder (const ChainOrder& order)
-    {
-        juce::uint32 packed = 0;
-        for (int i = 0; i < numItems; ++i)
-            packed |= (juce::uint32) order[(size_t) i] << (4 * i);
-        return packed;
-    }
-
-    inline ChainOrder unpackOrder (juce::uint32 packed)
-    {
-        ChainOrder order {};
-        for (int i = 0; i < numItems; ++i)
-            order[(size_t) i] = (int) ((packed >> (4 * i)) & 0xfu);
-        return order;
-    }
+    inline bool isAmp (int item)          { return item == ampItem; }
+    inline int  typeOf (int item)         { return item % count; }
+    inline int  copyOf (int item)         { return item / count; }
+    inline int  makeItem (int type, int copy) { return copy * count + type; }
 
     /** True if every item 0..numItems-1 appears exactly once. */
     inline bool isValidOrder (const ChainOrder& order)
     {
-        unsigned seen = 0;
+        juce::uint32 seen = 0;
         for (int item : order)
         {
             if (item < 0 || item >= numItems)
@@ -44,6 +41,63 @@ namespace PedalCatalog
             seen |= 1u << item;
         }
         return seen == (1u << numItems) - 1u;
+    }
+
+    /** "3,0,21,..." form used in saved state and preset files. */
+    inline juce::String orderToString (const ChainOrder& order)
+    {
+        juce::StringArray parts;
+        for (int item : order)
+            parts.add (juce::String (item));
+        return parts.joinIntoString (",");
+    }
+
+    /** Parses orderToString output. Returns false (and leaves `out` alone) if it is not a valid order. */
+    inline bool orderFromString (const juce::String& text, ChainOrder& out)
+    {
+        juce::StringArray parts;
+        parts.addTokens (text, ",", "");
+        parts.removeEmptyStrings();
+
+        if (parts.size() != numItems)
+            return false;
+
+        ChainOrder parsed {};
+        for (int i = 0; i < numItems; ++i)
+            parsed[(size_t) i] = parts[i].getIntValue();
+
+        if (! isValidOrder (parsed))
+            return false;
+
+        out = parsed;
+        return true;
+    }
+
+    /** Orders saved by version 1 packed 8 items (7 pedals + the amp as item 7) at 4 bits each into
+        one integer. Converts such a value; items that did not exist back then are parked at the end. */
+    inline bool orderFromLegacy (juce::uint32 packed, ChainOrder& out)
+    {
+        constexpr int legacyItems = count + 1;
+        ChainOrder converted {};
+        juce::uint32 seen = 0;
+        size_t n = 0;
+
+        for (int i = 0; i < legacyItems; ++i)
+        {
+            const int old = (int) ((packed >> (4 * i)) & 0xfu);
+            if (old >= legacyItems || (seen & (1u << old)) != 0)
+                return false;
+
+            seen |= 1u << old;
+            converted[n++] = old == count ? ampItem : old;
+        }
+
+        for (int item = 0; item < numItems; ++item)
+            if (std::find (converted.begin(), converted.begin() + (long) n, item) == converted.begin() + (long) n)
+                converted[n++] = item;
+
+        out = converted;
+        return isValidOrder (out);
     }
 
     struct Knob
@@ -120,6 +174,53 @@ namespace PedalCatalog
         }
         if (! ampPlaced)
             order[(size_t) n++] = ampItem;
+
+        // extra copies start out parked at the end
+        for (int copy = 1; copy < maxCopies; ++copy)
+            for (int i = 0; i < count; ++i)
+                order[(size_t) n++] = makeItem (i, copy);
+
         return order;
+    }
+
+    //==========================================================================
+    // Per-item helpers. `item` must be a pedal (not the amp).
+
+    inline const Pedal& pedalOf (int item) { return all()[(size_t) typeOf (item)]; }
+
+    /** "DELAY", "DELAY 2", ... */
+    inline juce::String displayName (int item)
+    {
+        const auto name = juce::String (pedalOf (item).name);
+        return copyOf (item) == 0 ? name : name + " " + juce::String (copyOf (item) + 1);
+    }
+
+    /** Parameter id of copy `copy` of a base id: unchanged for copy 0, "<id>_2", "<id>_3" ... otherwise. */
+    inline juce::String suffixedId (const juce::String& base, int copy)
+    {
+        return copy == 0 ? base : base + "_" + juce::String (copy + 1);
+    }
+
+    inline juce::String onId (int item)       { return suffixedId (pedalOf (item).onID, copyOf (item)); }
+    inline juce::String knobId (int item, int knob)
+    {
+        return suffixedId (pedalOf (item).knobs[(size_t) knob].paramID, copyOf (item));
+    }
+
+    /** The "<NAME>_ADDED" id of copy 0 of a pedal type (also for pedals whose first copy cannot be removed). */
+    inline juce::String addedBaseId (int type)
+    {
+        const auto& p = all()[(size_t) type];
+        return p.addedID != nullptr ? juce::String (p.addedID)
+                                    : juce::String (p.onID).upToLastOccurrenceOf ("_ON", false, false) + "_ADDED";
+    }
+
+    /** Copy 0 of a permanent pedal is always in the chain; every other copy can be added and removed. */
+    inline bool isRemovable (int item) { return copyOf (item) > 0 || pedalOf (item).isRemovable(); }
+
+    /** Id of the "in chain" switch, or an empty string for a permanent pedal. */
+    inline juce::String addedId (int item)
+    {
+        return isRemovable (item) ? suffixedId (addedBaseId (typeOf (item)), copyOf (item)) : juce::String();
     }
 }

@@ -156,23 +156,26 @@ public:
     static constexpr int width = 196;
     static constexpr int headerHeight = 60;
 
-    PedalView (const PedalCatalog::Pedal& pedalInfo, juce::AudioProcessorValueTreeState& state)
-        : info (pedalInfo), tint (pedalInfo.colour), apvts (state), footSwitch (tint)
+    /** `chainItem` is a pedal item number (see PedalCatalog): the pedal type plus which copy of it. */
+    PedalView (int chainItem, juce::AudioProcessorValueTreeState& state)
+        : item (chainItem), info (PedalCatalog::pedalOf (chainItem)), title (PedalCatalog::displayName (chainItem)),
+          tint (PedalCatalog::pedalOf (chainItem).colour), apvts (state), footSwitch (tint)
     {
         addAndMakeVisible (grip);
         addAndMakeVisible (footSwitch);
-        activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, info.onID, footSwitch);
+        activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, PedalCatalog::onId (item), footSwitch);
         lastActive = isActive();
 
-        for (const auto& k : info.knobs)
+        for (size_t i = 0; i < info.knobs.size(); ++i)
         {
+            const auto& k = info.knobs[i];
             auto* knob = knobs.add (new LabeledKnob (k.label, tint, k.decimals, k.suffix));
-            knob->attach (apvts, k.paramID);
+            knob->attach (apvts, PedalCatalog::knobId (item, (int) i));
             knob->setMaxDiameter (60);
             addAndMakeVisible (knob);
         }
 
-        if (info.isRemovable())
+        if (PedalCatalog::isRemovable (item))
         {
             removeButton.onClick = [this] { if (onRemove) onRemove(); };
             addAndMakeVisible (removeButton);
@@ -180,6 +183,7 @@ public:
     }
 
     const PedalCatalog::Pedal& getInfo() const { return info; }
+    int getItem() const { return item; }
     bool isActive() const { return footSwitch.getToggleState(); }
     DragGrip& getGrip() { return grip; }
 
@@ -228,7 +232,7 @@ public:
         auto header = r.removeFromTop ((float) headerHeight);
         g.setColour (on ? Theme::textHi : Theme::textMid);
         g.setFont (Theme::ui (12.5f, true, 0.16f));
-        g.drawText (info.name, header.withTrimmedTop (15.0f).removeFromTop (20.0f), juce::Justification::centred, false);
+        g.drawText (title, header.withTrimmedTop (15.0f).removeFromTop (20.0f), juce::Justification::centred, false);
 
         g.setColour (on ? tint.withAlpha (0.85f) : Theme::textLo);
         g.setFont (Theme::ui (8.5f, true, 0.2f));
@@ -285,7 +289,9 @@ public:
     }
 
 private:
+    int item;
     const PedalCatalog::Pedal& info;
+    juce::String title;
     juce::Colour tint;
     juce::AudioProcessorValueTreeState& apvts;
 
@@ -481,9 +487,28 @@ public:
         addChildComponent (addCard);
     }
 
-    static bool isInChain (juce::AudioProcessorValueTreeState& state, const PedalCatalog::Pedal& p)
+    /** True if this pedal item (type + copy) is part of the signal chain. */
+    static bool isInChain (juce::AudioProcessorValueTreeState& state, int item)
     {
-        return ! p.isRemovable() || state.getRawParameterValue (p.addedID)->load() > 0.5f;
+        const auto added = PedalCatalog::addedId (item);
+        return added.isEmpty() || state.getRawParameterValue (added)->load() > 0.5f;
+    }
+
+    /** First copy of this pedal type that is not in the chain yet, as an item number; -1 if all are used. */
+    static int firstFreeCopy (juce::AudioProcessorValueTreeState& state, int type)
+    {
+        for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+            if (! isInChain (state, PedalCatalog::makeItem (type, copy)))
+                return PedalCatalog::makeItem (type, copy);
+        return -1;
+    }
+
+    static int copiesInChain (juce::AudioProcessorValueTreeState& state, int type)
+    {
+        int n = 0;
+        for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+            n += isInChain (state, PedalCatalog::makeItem (type, copy)) ? 1 : 0;
+        return n;
     }
 
     /** Called after the user dropped an item in a new place, with the item ids in their new order. */
@@ -506,19 +531,18 @@ public:
                 continue;
             }
 
-            const auto& info = PedalCatalog::all()[(size_t) id];
-            if (! isInChain (apvts, info))
+            if (! isInChain (apvts, id))
                 continue;
 
-            auto* view = pedals.add (new PedalView (info, apvts));
+            auto* view = pedals.add (new PedalView (id, apvts));
             addAndMakeVisible (view);
             view->getGrip().addMouseListener (this, false);
             items.push_back ({ id, view });
         }
 
         bool anyLeft = false;
-        for (const auto& info : PedalCatalog::all())
-            anyLeft = anyLeft || ! isInChain (apvts, info);
+        for (int type = 0; type < PedalCatalog::count; ++type)
+            anyLeft = anyLeft || firstFreeCopy (apvts, type) >= 0;
         addCard.setVisible (anyLeft);
     }
 
@@ -789,9 +813,12 @@ class PedalRow : public juce::Button
 public:
     static constexpr int height = 58;
 
-    PedalRow (const PedalCatalog::Pedal& pedalInfo, bool alreadyInChain)
-        : juce::Button (juce::String ("row_") + pedalInfo.addedID),
-          info (pedalInfo), tint (pedalInfo.colour), inChain (alreadyInChain)
+    /** `type` is the pedal type; `copiesUsed` how many copies are in the chain already.
+        The row is only disabled once every copy is in use. */
+    PedalRow (int pedalType, int copiesUsed)
+        : juce::Button (juce::String ("row_") + PedalCatalog::all()[(size_t) pedalType].name),
+          type (pedalType), info (PedalCatalog::all()[(size_t) pedalType]), tint (info.colour),
+          used (copiesUsed), inChain (copiesUsed >= PedalCatalog::maxCopies)
     {
         setEnabled (! inChain);
         setMouseCursor (inChain ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
@@ -801,6 +828,8 @@ public:
     }
 
     const PedalCatalog::Pedal& getInfo() const { return info; }
+    int getType() const { return type; }
+    int getCopiesUsed() const { return used; }
 
     void paintButton (juce::Graphics& g, bool highlighted, bool down) override
     {
@@ -838,7 +867,8 @@ public:
 
         g.setColour (Theme::textHi.withAlpha (alpha));
         g.setFont (Theme::ui (12.5f, true, 0.12f));
-        g.drawText (info.name, juce::Rectangle<float> (textX, r.getCentreY() - 18.0f, textW, 18.0f),
+        g.drawText (used > 0 ? juce::String (info.name) + "  x" + juce::String (used) : juce::String (info.name),
+                    juce::Rectangle<float> (textX, r.getCentreY() - 18.0f, textW, 18.0f),
                     juce::Justification::centredLeft, false);
 
         g.setColour (Theme::textLo.withAlpha (juce::jmin (1.0f, alpha + 0.2f)));
@@ -851,10 +881,10 @@ public:
         if (inChain)
         {
             const auto font = Theme::ui (9.0f, true, 0.16f);
-            const float w = font.getStringWidthFloat ("IN CHAIN");
+            const float w = font.getStringWidthFloat ("ALL IN USE");
             g.setColour (Theme::textLo);
             g.setFont (font);
-            g.drawText ("IN CHAIN", juce::Rectangle<float> (rightEdge - w - 2.0f, r.getCentreY() - 8.0f, w + 2.0f, 16.0f),
+            g.drawText ("ALL IN USE", juce::Rectangle<float> (rightEdge - w - 2.0f, r.getCentreY() - 8.0f, w + 2.0f, 16.0f),
                         juce::Justification::centredRight, false);
 
             juce::Path tick;
@@ -878,9 +908,11 @@ public:
     }
 
 private:
+    int type;
     const PedalCatalog::Pedal& info;
     juce::Colour tint;
-    bool inChain;
+    int used;
+    bool inChain;   // every copy is in the chain
     juce::String knobNames;
 };
 
@@ -890,23 +922,21 @@ class AddPedalMenu : public juce::Component
 public:
     static constexpr int width = 330;
 
-    std::function<void (const PedalCatalog::Pedal&)> onPick;
+    /** Called with the pedal type the user picked. */
+    std::function<void (int)> onPick;
 
     explicit AddPedalMenu (juce::AudioProcessorValueTreeState& apvts)
     {
-        for (const auto& info : PedalCatalog::all())
+        for (int type = 0; type < PedalCatalog::count; ++type)
         {
-            if (! info.isRemovable())
-                continue;
+            const int used = ChainStrip::copiesInChain (apvts, type);
+            available += PedalCatalog::maxCopies - used;
 
-            const bool inChain = ChainStrip::isInChain (apvts, info);
-            available += inChain ? 0 : 1;
-
-            auto* row = rows.add (new PedalRow (info, inChain));
+            auto* row = rows.add (new PedalRow (type, used));
             row->onClick = [this, row]
             {
                 if (onPick)
-                    onPick (row->getInfo());
+                    onPick (row->getType());
 
                 if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
                     box->dismiss();
@@ -953,10 +983,11 @@ public:
         }
     }
 
+    /** Row of a pedal type, found by its "<NAME>_ADDED" id (e.g. "DELAY_ADDED"). */
     PedalRow* findRow (const juce::String& addedID) const
     {
         for (auto* row : rows)
-            if (addedID == row->getInfo().addedID)
+            if (addedID == PedalCatalog::addedBaseId (row->getType()))
                 return row;
         return nullptr;
     }
@@ -1027,10 +1058,10 @@ public:
             return;
 
         auto menu = std::make_unique<AddPedalMenu> (apvts);
-        menu->onPick = [safe = juce::Component::SafePointer<SignalChainPanel> (this)] (const PedalCatalog::Pedal& info)
+        menu->onPick = [safe = juce::Component::SafePointer<SignalChainPanel> (this)] (int type)
         {
             if (safe != nullptr)
-                safe->addPedal (info);
+                safe->addPedal (type);
         };
 
         auto& box = juce::CallOutBox::launchAsynchronously (std::move (menu),
@@ -1042,9 +1073,9 @@ public:
 private:
     int currentMask() const
     {
-        int mask = 0, bit = 0;
-        for (const auto& info : PedalCatalog::all())
-            mask |= (ChainStrip::isInChain (apvts, info) ? 1 : 0) << bit++;
+        int mask = 0;
+        for (int item = 0; item < PedalCatalog::ampItem; ++item)
+            mask |= (ChainStrip::isInChain (apvts, item) ? 1 : 0) << item;
         return mask;
     }
 
@@ -1056,12 +1087,12 @@ private:
 
         for (auto* p : strip.pedals)
         {
-            if (p->getInfo().isRemovable())
+            if (PedalCatalog::isRemovable (p->getItem()))
             {
-                const auto* info = &p->getInfo();
-                p->onRemove = [self = this, info]
+                const int item = p->getItem();
+                p->onRemove = [self = this, item]
                 {
-                    self->setAdded (*info, false);
+                    self->setAdded (item, false);
                     juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<SignalChainPanel> (self)]
                     {
                         if (safe != nullptr)
@@ -1086,9 +1117,9 @@ private:
         addButton.setEnabled (strip.addCard.isVisible());
     }
 
-    void setAdded (const PedalCatalog::Pedal& info, bool added)
+    void setAdded (int item, bool added)
     {
-        if (auto* param = apvts.getParameter (info.addedID))
+        if (auto* param = apvts.getParameter (PedalCatalog::addedId (item)))
         {
             param->beginChangeGesture();
             param->setValueNotifyingHost (added ? 1.0f : 0.0f);
@@ -1096,14 +1127,19 @@ private:
         }
     }
 
-    void addPedal (const PedalCatalog::Pedal& info)
+    /** Puts the first unused copy of a pedal type into the chain. */
+    void addPedal (int type)
     {
-        setAdded (info, true);
+        const int item = ChainStrip::firstFreeCopy (apvts, type);
+        if (item < 0)
+            return;
+
+        setAdded (item, true);
         rebuild();
 
         // bring the new pedal into view
         for (auto* p : strip.pedals)
-            if (&p->getInfo() == &info)
+            if (p->getItem() == item)
                 viewport.setViewPosition (juce::jmax (0, p->getRight() - viewport.getMaximumVisibleWidth() + 40), 0);
     }
 

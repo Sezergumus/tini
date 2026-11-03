@@ -452,6 +452,326 @@ namespace
             check (b.proc.getChainOrder() == swapped, "state restores the chain order");
         }
     }
+
+    //==========================================================================
+    void testPedalCopies()
+    {
+        std::printf ("\n-- pedal copies --\n");
+        const int from = 20 * blockSize;
+
+        // Copy 0 keeps the old parameter ids; permanent pedals only have switches on later copies.
+        {
+            Prepared p;
+            check (p.proc.apvts.getParameter ("COMP_ADDED") == nullptr && p.proc.apvts.getParameter ("COMP_ADDED_2") != nullptr,
+                   "the compressor's first copy is permanent, later copies can be added");
+            check (p.proc.apvts.getParameter ("DELAY_TIME") != nullptr && p.proc.apvts.getParameter ("DELAY_TIME_3") != nullptr,
+                   "copy 0 keeps the plain parameter ids, copies get a suffix");
+            check (PedalCatalog::addedId (PedalCatalog::makeItem (1, 0)).isEmpty()
+                       && PedalCatalog::addedId (PedalCatalog::makeItem (1, 1)) == "COMP_ADDED_2"
+                       && PedalCatalog::addedId (PedalCatalog::makeItem (5, 0)) == "DELAY_ADDED",
+                   "added ids are derived consistently");
+        }
+
+        // Two boosts in a row stack their gain.
+        {
+            auto boosts = [] (int n)
+            {
+                return [n] (auto& p)
+                {
+                    for (int copy = 0; copy < n; ++copy)
+                    {
+                        const auto sfx = copy == 0 ? juce::String() : "_" + juce::String (copy + 1);
+                        setParam (p, "BOOST_GAIN" + sfx, 12.0f);
+                        setParam (p, "BOOST_ADDED" + sfx, 1.0f);
+                        setParam (p, "BOOST_ON" + sfx, 1.0f);
+                    }
+                };
+            };
+
+            const auto one = rms (sineThrough (0.01f, boosts (1)), 0, from);
+            const auto two = rms (sineThrough (0.01f, boosts (2)), 0, from);
+            check (std::abs (two / one - 3.98f) < 0.5f, "a second boost copy adds its gain (ratio " + juce::String (two / one, 2) + ")");
+        }
+
+        // A copy that is parked (not added) or bypassed does nothing, even with extreme settings.
+        {
+            const auto ref = sineThrough (0.05f, [] (auto&) {});
+            const auto out = sineThrough (0.05f, [] (auto& p)
+            {
+                setParam (p, "BOOST_GAIN_2", 24.0f);
+                setParam (p, "BOOST_ON_2", 1.0f);
+                setParam (p, "DELAY_MIX_3", 100.0f);
+                setParam (p, "DELAY_ADDED_3", 1.0f);
+                setParam (p, "DELAY_ON_3", 0.0f);
+            });
+            check (differenceRms (out, ref, from) < 1.0e-6f, "copies that are not in the chain or are bypassed are ignored");
+        }
+
+        // The chain order round-trips through its text form and rejects garbage.
+        {
+            auto order = PedalCatalog::defaultOrder();
+            std::swap (order[0], order[9]);
+            PedalCatalog::ChainOrder parsed {};
+            check (PedalCatalog::orderFromString (PedalCatalog::orderToString (order), parsed) && parsed == order,
+                   "chain order survives orderToString / orderFromString");
+            check (! PedalCatalog::orderFromString ("1,2,3", parsed) && parsed == order, "a chain order of the wrong size is rejected");
+        }
+
+        // Version 1 sessions and presets stored 8 items packed into an integer: they must still load.
+        {
+            // old default: gate comp boost od AMP(7) chorus delay reverb
+            const int legacyItems[] = { 0, 1, 2, 3, 7, 4, 5, 6 };
+            juce::uint32 packed = 0;
+            for (int i = 0; i < 8; ++i)
+                packed |= (juce::uint32) legacyItems[i] << (4 * i);
+
+            PedalCatalog::ChainOrder converted {};
+            check (PedalCatalog::orderFromLegacy (packed, converted) && converted == PedalCatalog::defaultOrder(),
+                   "a version 1 chain order converts to the new default order");
+
+            // an old session
+            Prepared a;
+            juce::MemoryBlock current;
+            a.proc.getStateInformation (current);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (current.getData(), (int) current.getSize());
+            auto state = juce::ValueTree::fromXml (*xml);
+            state.removeProperty ("chain", nullptr);
+            state.setProperty ("chainOrder", (int) packed, nullptr);
+
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*state.createXml(), old);
+
+            Prepared b;
+            auto swapped = PedalCatalog::defaultOrder();
+            std::swap (swapped[0], swapped[1]);
+            b.proc.setChainOrder (swapped);
+            b.proc.setStateInformation (old.getData(), (int) old.getSize());
+            check (b.proc.getChainOrder() == PedalCatalog::defaultOrder(), "a version 1 session restores its chain order");
+
+            // an old preset file
+            auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("nfa_legacy_preset_test");
+            folder.deleteRecursively();
+            folder.createDirectory();
+
+            juce::XmlElement preset ("NeuralFlowPreset");
+            preset.setAttribute ("version", 1);
+            preset.setAttribute ("name", "Old Preset");
+            preset.setAttribute ("chainOrder", (int) packed);
+            check (preset.writeTo (folder.getChildFile ("Old Preset" + juce::String (PresetManager::fileExtension))), "wrote a version 1 preset file");
+
+            PresetManager manager (folder);
+            const int index = manager.indexOf ("Old Preset");
+            check (index >= 0 && manager.get (index).order == PedalCatalog::defaultOrder(), "a version 1 preset file keeps its chain order");
+            folder.deleteRecursively();
+        }
+    }
+
+    //==========================================================================
+    void testPresets()
+    {
+        std::printf ("\n-- presets --\n");
+
+        auto tempFolder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getChildFile ("nfa_preset_test_" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+
+        {
+            Prepared a;
+            auto& p = a.proc;
+            p.presets.setUserFolder (tempFolder);
+
+            const int numFactory = p.presets.getNumFactory();
+            check (numFactory >= 5, "there are factory presets (" + juce::String (numFactory) + ")");
+            check (p.getNumPrograms() == numFactory, "the host sees the factory presets as programs");
+
+            // every factory preset only names real parameters, in range, with a valid chain order
+            bool idsOk = true, orderOk = true, namesOk = true;
+            for (int i = 0; i < numFactory; ++i)
+            {
+                const auto& preset = p.presets.get (i);
+                orderOk = orderOk && PedalCatalog::isValidOrder (preset.order);
+                namesOk = namesOk && preset.name.isNotEmpty() && p.presets.indexOf (preset.name) == i;
+                for (const auto& [id, v] : preset.values)
+                {
+                    auto* r = dynamic_cast<juce::RangedAudioParameter*> (p.apvts.getParameter (id));
+                    idsOk = idsOk && r != nullptr && v >= r->getNormalisableRange().start && v <= r->getNormalisableRange().end;
+                }
+            }
+            check (idsOk, "factory presets only use existing parameters inside their range");
+            check (orderOk, "factory presets have valid chain orders");
+            check (namesOk, "factory preset names are unique");
+
+            // every factory preset makes sound without blowing up
+            bool allFinite = true, allAudible = true;
+            for (int i = 0; i < numFactory; ++i)
+            {
+                p.loadPreset (i);
+                auto out = run (p, 40, [] (int b, juce::AudioBuffer<float>& buf)
+                {
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (int n = 0; n < buf.getNumSamples(); ++n)
+                            buf.setSample (ch, n, 0.2f * std::sin (juce::MathConstants<float>::twoPi * 196.0f * (float) (b * blockSize + n) / (float) sampleRate));
+                });
+                for (int n = 0; n < out.getNumSamples(); ++n)
+                    allFinite = allFinite && std::isfinite (out.getSample (0, n)) && std::abs (out.getSample (0, n)) < 8.0f;
+                allAudible = allAudible && out.getMagnitude (0, 0, out.getNumSamples()) > 0.01f;
+            }
+            check (allFinite, "every factory preset produces finite, bounded audio");
+            check (allAudible, "every factory preset is audible");
+
+            // loading applies parameters, which pedals are in the chain, and their order
+            const int hg = p.presets.indexOf ("High Gain Rhythm");
+            check (hg >= 0 && p.loadPreset (hg), "a factory preset loads");
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 85.0f) < 0.01f, "preset sets the amp drive");
+            check (p.apvts.getRawParameterValue ("GATE_ADDED")->load() > 0.5f, "preset puts its pedals in the chain");
+            check (p.apvts.getRawParameterValue ("CHORUS_ADDED")->load() < 0.5f, "preset leaves the other pedals out");
+            check (p.getCurrentPresetIndex() == hg && ! p.isPresetModified(), "the loaded preset is current and unmodified");
+
+            // changing a knob marks it as edited; loading another preset replaces everything
+            setParam (p, "DRIVE", 20.0f);
+            check (p.isPresetModified(), "a tweak marks the preset as edited");
+            auto swappedOrder = p.getChainOrder();
+            std::swap (swappedOrder[0], swappedOrder[1]);
+            p.setChainOrder (swappedOrder);
+            p.loadPreset (p.presets.indexOf ("Default"));
+            check (p.getChainOrder() == PedalCatalog::defaultOrder(), "loading Default restores the chain order");
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 50.0f) < 0.01f
+                       && p.apvts.getRawParameterValue ("GATE_ADDED")->load() < 0.5f,
+                   "loading Default resets the settings and removes extra pedals");
+
+            // name rules
+            check (p.presets.validateName ("").failed(), "an empty name is rejected");
+            check (p.presets.validateName ("  ").failed(), "a blank name is rejected");
+            check (p.presets.validateName ("classic LEAD").failed(), "a factory name cannot be reused");
+            check (p.presets.validateName ("a/b").failed(), "a name with path characters is rejected");
+            check (p.presets.validateName (juce::String::repeatedString ("x", 60)).failed(), "an over-long name is rejected");
+            check (p.saveCurrentAsPreset ("Default") < 0, "saving over a factory preset is refused");
+
+            // save, edit, reload
+            p.loadPreset (hg);
+            setParam (p, "DRIVE", 33.0f);
+            setParam (p, "REVERB_ADDED", 1.0f);
+            setParam (p, "REVERB_MIX", 61.0f);
+            auto order = p.getChainOrder();
+            std::swap (order[0], order[2]);
+            p.setChainOrder (order);
+
+            const int saved = p.saveCurrentAsPreset ("  My Test Tone ");
+            check (saved >= numFactory, "saving creates a user preset");
+            check (saved >= 0 && p.presets.get (saved).name == "My Test Tone" && ! p.presets.get (saved).factory,
+                   "the name is trimmed and the preset is a user preset");
+            check (p.getCurrentPresetIndex() == saved && ! p.isPresetModified(), "after saving, the new preset is current and unmodified");
+            check (tempFolder.getNumberOfChildFiles (juce::File::findFiles, "*.nfpreset") == 1, "a preset file was written");
+
+            p.loadPreset (p.presets.indexOf ("Default"));
+            check (p.loadPreset (saved), "a user preset loads");
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 33.0f) < 0.01f
+                       && std::abs (p.apvts.getRawParameterValue ("REVERB_MIX")->load() - 61.0f) < 0.01f
+                       && p.apvts.getRawParameterValue ("REVERB_ADDED")->load() > 0.5f,
+                   "loading a user preset restores the saved knobs and pedals");
+            check (p.getChainOrder() == order, "loading a user preset restores the chain order");
+
+            // saving under the same name replaces, it does not add
+            setParam (p, "DRIVE", 44.0f);
+            check (p.presets.wouldOverwrite ("my test tone"), "an existing user name is reported as an overwrite");
+            const int again = p.saveCurrentAsPreset ("My Test Tone");
+            check (again == saved && p.presets.size() == numFactory + 1, "saving under the same name replaces the preset");
+            p.loadPreset (p.presets.indexOf ("Default"));
+            p.loadPreset (again);
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 44.0f) < 0.01f, "the replaced preset holds the new values");
+
+            // user presets are listed after the factory ones, alphabetically
+            p.saveCurrentAsPreset ("Aardvark");
+            check (p.presets.get (numFactory).name == "Aardvark" && p.presets.get (numFactory + 1).name == "My Test Tone",
+                   "user presets are sorted after the factory presets");
+
+            // the preset the session was based on survives a save / restore of the plugin state
+            p.loadPreset (p.presets.indexOf ("My Test Tone"));
+            juce::MemoryBlock state;
+            p.getStateInformation (state);
+
+            Prepared b;
+            b.proc.presets.setUserFolder (tempFolder);
+            b.proc.setStateInformation (state.getData(), (int) state.getSize());
+            check (b.proc.getCurrentPresetIndex() == b.proc.presets.indexOf ("My Test Tone") && ! b.proc.isPresetModified(),
+                   "the session remembers which preset it is on");
+
+            // a host echoing the current program must not wipe the restored settings
+            setParam (b.proc, "DRIVE", 12.0f);
+            b.proc.setCurrentProgram (b.proc.getCurrentProgram());
+            check (std::abs (b.proc.apvts.getRawParameterValue ("DRIVE")->load() - 12.0f) < 0.01f,
+                   "re-selecting the current host program does not reload it");
+
+            const int other = (b.proc.getCurrentProgram() + 1) % numFactory;
+            b.proc.setCurrentProgram (other);
+            check (b.proc.getCurrentProgram() == other && b.proc.getCurrentPresetIndex() == other,
+                   "the host can switch programs");
+        }
+
+        // a fresh manager finds the saved files
+        {
+            PresetManager fresh (tempFolder);
+            check (fresh.size() == fresh.getNumFactory() + 2 && fresh.indexOf ("My Test Tone") >= 0,
+                   "user presets are found again from disk");
+        }
+
+        tempFolder.deleteRecursively();
+    }
+
+    void testPresetEditing()
+    {
+        std::printf ("\n-- renaming and deleting presets --\n");
+
+        auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                          .getChildFile ("nfa_preset_edit_" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+
+        {
+            Prepared a;
+            auto& p = a.proc;
+            p.presets.setUserFolder (folder);
+            const int numFactory = p.presets.getNumFactory();
+
+            setParam (p, "DRIVE", 31.0f);
+            p.saveCurrentAsPreset ("Alpha");
+            setParam (p, "DRIVE", 62.0f);
+            p.saveCurrentAsPreset ("Bravo");
+            check (p.presets.size() == numFactory + 2, "two user presets exist");
+
+            // rename
+            const int bravo = p.presets.indexOf ("Bravo");
+            check (p.getCurrentPresetIndex() == bravo, "the last saved preset is current");
+            check (p.renamePreset (bravo, "  Zulu  ").wasOk(), "a user preset can be renamed");
+            check (p.presets.indexOf ("Bravo") < 0 && p.presets.indexOf ("Zulu") >= numFactory, "the old name is gone, the new one is listed");
+            check (p.getCurrentPresetIndex() == p.presets.indexOf ("Zulu"), "renaming the current preset keeps it current");
+            check (! folder.getChildFile ("Bravo.nfpreset").exists() && folder.getChildFile ("Zulu.nfpreset").existsAsFile(),
+                   "the file follows the name");
+
+            p.loadPreset (p.presets.indexOf ("Alpha"));
+            p.loadPreset (p.presets.indexOf ("Zulu"));
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 62.0f) < 0.01f, "a renamed preset keeps its settings");
+
+            check (p.renamePreset (p.presets.indexOf ("Zulu"), "alpha").failed(), "renaming onto another user preset is refused");
+            check (p.renamePreset (p.presets.indexOf ("Zulu"), "Default").failed(), "renaming to a factory name is refused");
+            check (p.renamePreset (p.presets.indexOf ("Zulu"), "").failed(), "renaming to nothing is refused");
+            check (p.renamePreset (0, "Mine").failed(), "factory presets cannot be renamed");
+            check (p.renamePreset (p.presets.indexOf ("Zulu"), "ZULU").wasOk() && p.presets.indexOf ("ZULU") >= 0,
+                   "changing only the capitals works");
+
+            // delete
+            check (! p.deletePreset (0), "factory presets cannot be deleted");
+            const int alpha = p.presets.indexOf ("Alpha");
+            check (p.deletePreset (alpha), "a user preset can be deleted");
+            check (p.presets.indexOf ("Alpha") < 0 && p.presets.size() == numFactory + 1, "the deleted preset is gone from the list");
+            check (folder.getNumberOfChildFiles (juce::File::findFiles, "*.nfpreset") == 1, "...and from disk");
+            check (p.getCurrentPresetIndex() >= 0, "deleting another preset leaves the current one alone");
+
+            const float driveBefore = p.apvts.getRawParameterValue ("DRIVE")->load();
+            check (p.deletePreset (p.getCurrentPresetIndex()), "the current preset can be deleted too");
+            check (p.getCurrentPresetIndex() == -1 && ! p.isPresetModified(), "the setup becomes untitled");
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - driveBefore) < 0.01f, "...and keeps its settings");
+        }
+
+        folder.deleteRecursively();
+    }
 }
 
 void renderUiSnapshots (const juce::File& dir);   // Tests/UiSnapshots.cpp
@@ -472,6 +792,9 @@ int main (int argc, char** argv)
     testCompressor();
     testAddOnPedals();
     testChainOrder();
+    testPedalCopies();
+    testPresets();
+    testPresetEditing();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

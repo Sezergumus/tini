@@ -65,7 +65,7 @@ namespace
     {
         juce::StringArray parts;
         for (int id : order)
-            parts.add (id == PedalCatalog::ampItem ? juce::String ("AMP") : juce::String (PedalCatalog::all()[(size_t) id].name));
+            parts.add (id == PedalCatalog::ampItem ? juce::String ("AMP") : PedalCatalog::displayName (id));
         return parts.joinIntoString (" > ");
     }
 }
@@ -75,6 +75,9 @@ void renderUiSnapshots (const juce::File& dir)
     dir.createDirectory();
 
     NeuralFlowAmpAudioProcessor p;
+    const auto presetFolder = dir.getChildFile ("presets_tmp");   // never touch the user's real presets
+    presetFolder.deleteRecursively();
+    p.presets.setUserFolder (presetFolder);
     p.setRateAndBufferSizeDetails (48000.0, 512);
     p.prepareToPlay (48000.0, 512);
 
@@ -174,8 +177,9 @@ void renderUiSnapshots (const juce::File& dir)
         auto* menu = findFirst<AddPedalMenu> (*editor);
         auto* gateRow = menu != nullptr ? menu->findRow ("GATE_ADDED") : nullptr;
         auto* delayRow = menu != nullptr ? menu->findRow ("DELAY_ADDED") : nullptr;
-        report (gateRow != nullptr && ! gateRow->isEnabled(), "a pedal that is already in the chain is greyed out in the popover");
-        report (delayRow != nullptr && delayRow->isEnabled(), "a pedal that is available can be picked");
+        report (gateRow != nullptr && gateRow->isEnabled() && gateRow->getCopiesUsed() == 1,
+                "a pedal that is already in the chain can still be picked (it counts one copy in use)");
+        report (delayRow != nullptr && delayRow->isEnabled() && delayRow->getCopiesUsed() == 0, "a pedal that is available can be picked");
 
         if (delayRow != nullptr)
         {
@@ -184,6 +188,26 @@ void renderUiSnapshots (const juce::File& dir)
             report (p.apvts.getRawParameterValue ("DELAY_ADDED")->load() > 0.5f, "picking DELAY in the popover adds it to the chain");
             report (findFirst<AddPedalMenu> (*editor) == nullptr, "the popover closes after picking");
         }
+
+        // a second gate: picking GATE again adds copy 2 with its own parameters
+        addButton->triggerClick();
+        settleLoop (300);
+        if (auto* again = findFirst<AddPedalMenu> (*editor))
+            if (auto* row = again->findRow ("GATE_ADDED"))
+                row->triggerClick();
+        settleLoop (400);
+
+        report (p.apvts.getRawParameterValue ("GATE_ADDED_2")->load() > 0.5f, "picking GATE twice adds a second gate");
+
+        int gateViews = 0;
+        if (auto* panel = findFirst<SignalChainPanel> (*editor))
+            for (auto* v : panel->getStrip().pedals)
+                gateViews += PedalCatalog::typeOf (v->getItem()) == 0 ? 1 : 0;
+        report (gateViews == 2, "both gates are shown in the chain");
+        save (*editor, dir.getChildFile ("ui_two_gates.png"));
+
+        setParam (p, "GATE_ADDED_2", 0.0f);
+        settle();
     }
 
     //==========================================================================
@@ -201,7 +225,7 @@ void renderUiSnapshots (const juce::File& dir)
         auto pedalOf = [&] (int id) -> PedalView*
         {
             for (auto* v : strip.pedals)
-                if (&v->getInfo() == &PedalCatalog::all()[(size_t) id])
+                if (v->getItem() == id)
                     return v;
             return nullptr;
         };
@@ -285,5 +309,198 @@ void renderUiSnapshots (const juce::File& dir)
         }
     }
 
+    //==========================================================================
+    // Presets: header bar, stepping, edited marker, save dialog.
+    p.loadPreset (p.presets.indexOf ("Default"));
+    settle();
+    settleLoop (300);
+
+    if (auto* bar = findFirst<PresetBar> (*editor))
+    {
+        auto& nameBtn = bar->getNameButton();
+        auto shownName = [&] { return nameBtn.getDisplayedName(); };
+        auto pedalCount = [&]
+        {
+            int n = 0;
+            if (auto* panel = findFirst<SignalChainPanel> (*editor))
+                n = panel->getStrip().pedals.size();
+            return n;
+        };
+
+        report (shownName() == "Default" && nameBtn.getTag() == "FACTORY", "the preset bar shows the current preset: " + shownName());
+
+        p.loadPreset (p.presets.indexOf ("Classic Lead"));
+        settle();
+        settleLoop (300);
+        report (shownName() == "Classic Lead", "the bar follows a preset loaded elsewhere");
+        report (pedalCount() == 6, "loading a preset rebuilds the chain on screen (" + juce::String (pedalCount()) + " pedals)");
+        save (*editor, dir.getChildFile ("ui_preset_classic_lead.png"));
+
+        bar->getNextButton().triggerClick();
+        settleLoop (300);
+        report (shownName() == "High Gain Rhythm", "the next arrow loads the next preset: " + shownName());
+        report (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 85.0f) < 0.01f, "...and applies its settings");
+        report (pedalCount() == 4, "...and rebuilds the chain (" + juce::String (pedalCount()) + " pedals)");
+        save (*editor, dir.getChildFile ("ui_preset_high_gain.png"));
+
+        bar->getPrevButton().triggerClick();
+        settleLoop (200);
+        report (shownName() == "Classic Lead", "the previous arrow goes back: " + shownName());
+
+        bar->select (0);
+        bar->getPrevButton().triggerClick();
+        settleLoop (200);
+        report (shownName() == p.presets.get (p.presets.size() - 1).name, "previous wraps around to the last preset: " + shownName());
+        bar->getNextButton().triggerClick();
+        settleLoop (200);
+        report (shownName() == "Default", "next wraps around to the first preset");
+
+        // tweak something: the preset shows as edited
+        bar->select (p.presets.indexOf ("Warm Crunch"));
+        settleLoop (200);
+        report (! nameBtn.isEdited(), "a freshly loaded preset is not marked as edited");
+        setParam (p, "DRIVE", 70.0f);
+        settle();
+        settleLoop (200);
+        report (nameBtn.isEdited(), "turning a knob marks the preset as edited");
+        save (*editor, dir.getChildFile ("ui_preset_edited.png"));
+
+        // save dialog
+        bar->getSaveButton().triggerClick();
+        settleLoop (300);
+        auto* dialog = findFirst<SavePresetPanel> (*editor);
+        report (dialog != nullptr, "SAVE opens the save dialog");
+
+        if (dialog != nullptr)
+        {
+            report (dialog->isSaveEnabled(), "the suggested name 'My Warm Crunch' can be saved");
+            save (*editor, dir.getChildFile ("ui_save_dialog.png"));
+
+            dialog->setName ("Warm Crunch");
+            report (! dialog->isSaveEnabled(), "a factory preset's name cannot be used: " + dialog->getHint());
+            dialog->setName ("");
+            report (! dialog->isSaveEnabled(), "an empty name cannot be saved");
+            dialog->setName ("a/b");
+            report (! dialog->isSaveEnabled(), "a name with path characters cannot be saved: " + dialog->getHint());
+            save (*editor, dir.getChildFile ("ui_save_dialog_invalid.png"));
+
+            dialog->setName ("UI Test Tone");
+            report (dialog->isSaveEnabled(), "a new name can be saved");
+            report (dialog->save(), "saving from the dialog succeeds");
+            settleLoop (300);
+
+            report (findFirst<SavePresetPanel> (*editor) == nullptr, "the dialog closes after saving");
+            report (p.presets.indexOf ("UI Test Tone") >= p.presets.getNumFactory(), "the preset was added to the list");
+            report (shownName() == "UI Test Tone" && ! nameBtn.isEdited(), "the bar shows the saved preset: " + shownName());
+            report (nameBtn.getTag() == "SAVED", "the bar confirms with SAVED");
+            save (*editor, dir.getChildFile ("ui_after_save.png"));
+        }
+
+        // the saved preset is reachable with the arrows and brings the tweak back
+        bar->select (0);
+        settleLoop (200);
+        bar->getPrevButton().triggerClick();
+        settleLoop (300);
+        report (shownName() == "UI Test Tone", "the saved preset is the last one in the list: " + shownName());
+        report (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 70.0f) < 0.01f, "...and restores the saved settings");
+        report (nameBtn.getTag() == "USER" || nameBtn.getTag() == "SAVED", "...and is tagged as a user preset");
+
+        // opening the dialog on a user preset suggests its own name, and saving replaces it
+        bar->getSaveButton().triggerClick();
+        settleLoop (300);
+        if (auto* again = findFirst<SavePresetPanel> (*editor))
+        {
+            report (again->isSaveEnabled() && again->getHint().containsIgnoreCase ("replaces"),
+                    "re-saving a user preset offers to replace it: " + again->getHint());
+            save (*editor, dir.getChildFile ("ui_save_dialog_replace.png"));
+            again->save();
+            settleLoop (300);
+        }
+        report (p.presets.size() == p.presets.getNumFactory() + 1, "replacing does not create a duplicate");
+
+        // a second user preset, so the list has more than one
+        p.saveCurrentAsPreset ("Another Tone");
+        p.loadPreset (p.presets.indexOf ("UI Test Tone"));
+        settleLoop (200);
+
+        //======================================================================
+        // The preset list
+        nameBtn.triggerClick();
+        settleLoop (300);
+        auto* list = findFirst<PresetListPanel> (*editor);
+        report (list != nullptr, "clicking the preset name opens the list");
+
+        if (list != nullptr)
+        {
+            report (list->getNumRows() == p.presets.size(), "the list has one line per preset (" + juce::String (list->getNumRows()) + ")");
+            save (*editor, dir.getChildFile ("ui_preset_list.png"));
+
+            if (auto* factoryRow = list->findRow ("Default"))
+            {
+                factoryRow->beginRename();
+                factoryRow->beginDelete();
+                report (factoryRow->getMode() == PresetRow::Mode::normal, "factory presets offer neither rename nor delete");
+            }
+
+            // rename: a taken name is refused with a hint, a free one is applied
+            auto* row = list->findRow ("UI Test Tone");
+            report (row != nullptr && ! row->isFactory(), "your own preset has a line in the list");
+
+            if (row != nullptr)
+            {
+                row->beginRename();
+                row->setRenameText ("Another Tone");
+                report (list->getHint().isNotEmpty(), "typing a taken name shows a hint: " + list->getHint());
+                report (row->commitRename().failed() && row->getMode() == PresetRow::Mode::renaming, "a taken name is refused and editing continues");
+                save (*editor, dir.getChildFile ("ui_preset_list_rename_error.png"));
+
+                row->setRenameText ("Renamed Tone");
+                report (list->getHint().isEmpty(), "a free name clears the hint");
+                save (*editor, dir.getChildFile ("ui_preset_list_renaming.png"));
+                report (row->commitRename().wasOk(), "a free name is accepted");
+                settleLoop (300);
+
+                report (p.presets.indexOf ("Renamed Tone") >= 0 && p.presets.indexOf ("UI Test Tone") < 0, "the preset has its new name");
+                report (shownName() == "Renamed Tone", "the bar shows the new name of the current preset: " + shownName());
+                report (list->findRow ("Renamed Tone") != nullptr && list->findRow ("UI Test Tone") == nullptr, "the list was rebuilt");
+            }
+
+            // delete: asks first, KEEP backs out, DELETE removes
+            row = list->findRow ("Renamed Tone");
+            if (row != nullptr)
+            {
+                row->beginDelete();
+                report (row->getMode() == PresetRow::Mode::confirmingDelete, "the bin asks for confirmation");
+                save (*editor, dir.getChildFile ("ui_preset_list_confirm_delete.png"));
+
+                row->cancel();
+                report (p.presets.indexOf ("Renamed Tone") >= 0, "KEEP leaves the preset alone");
+
+                row->beginDelete();
+                row->confirmDelete();
+                settleLoop (300);
+
+                report (p.presets.indexOf ("Renamed Tone") < 0, "DELETE removes the preset");
+                report (list->findRow ("Renamed Tone") == nullptr && list->getNumRows() == p.presets.size(), "the list no longer shows it");
+                report (shownName() == "Untitled", "deleting the current preset leaves the bar untitled: " + shownName());
+                save (*editor, dir.getChildFile ("ui_preset_list_after_delete.png"));
+            }
+
+            // picking a line loads it and closes the list
+            if (auto* pick = list->findRow ("Funk Clean"))
+            {
+                pick->onPick();
+                settleLoop (300);
+                report (shownName() == "Funk Clean", "clicking a line loads that preset: " + shownName());
+                report (findFirst<PresetListPanel> (*editor) == nullptr, "the list closes after picking");
+            }
+        }
+    }
+    else
+    {
+        report (false, "the editor has a preset bar");
+    }
+
     editor.reset();
+    presetFolder.deleteRecursively();
 }

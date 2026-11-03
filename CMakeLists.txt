@@ -13,6 +13,15 @@ FetchContent_MakeAvailable(juce)
 # Define the project as both VST3 plugin and standalone application
 juce_add_plugin(NeuralFlowAmp
     COMPANY_NAME "YourName"
+    # PRODUCT_NAME is the file name (Tini.exe, Tini.vst3) and also the name shown by the DAW and
+    # in the window title. It has to stay plain ASCII: JUCE passes it to the compiler as a macro
+    # on the command line, where a non-ASCII letter such as the dotless i is not read as UTF-8 and
+    # the window title then crashes the app when it is drawn. The UI itself writes "tını".
+    # The CMake target stays NeuralFlowAmp so existing build paths keep working.
+    PRODUCT_NAME "Tini"
+    BUNDLE_ID "com.yourname.tini"
+    ICON_BIG   "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Branding/icon-512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Branding/icon-64.png"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
@@ -30,13 +39,51 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/Crunch.cpp
     Source/Crunch.h
     Source/PedalCatalog.h
+    Source/LatencyProbe.h
+    Source/PresetManager.h
     Source/DSP/StereoDelay.h
     Source/UI/Theme.h
     Source/UI/NeuralLookAndFeel.h
     Source/UI/Widgets.h
     Source/UI/Panels.h
     Source/UI/MainView.h
+    Source/UI/PresetBar.h
+    Source/UI/PresetList.h
 )
+
+# Standalone-only helper that reports the real audio device latency to the UI.
+# (JucePlugin_Build_Standalone is only defined on the format target, hence the separate file.)
+target_sources(NeuralFlowAmp_Standalone PRIVATE Source/StandaloneBridge.cpp)
+
+# Optional ASIO audio driver support (lowest latency on Windows).
+# Steinberg's ASIO SDK is not bundled here (you accept its licence when you get it from
+# https://www.steinberg.net/developers/ - it is offered under GPLv3 or the proprietary agreement).
+# Unzip it anywhere and either
+#   cmake -B build -DASIO_SDK_DIR=C:/SDKs/asiosdk
+# or set an ASIO_SDK_DIR environment variable, or drop it in third_party/asiosdk.
+# Without the SDK the plugin builds as before and only offers WASAPI / DirectSound.
+if(WIN32)
+    set(ASIO_SDK_DIR "$ENV{ASIO_SDK_DIR}" CACHE PATH "Folder of the Steinberg ASIO SDK (contains common/iasiodrv.h)")
+
+    if(NOT ASIO_SDK_DIR)
+        foreach(candidate
+                "${CMAKE_SOURCE_DIR}/third_party/asiosdk"
+                "C:/SDKs/asiosdk" "C:/asiosdk" "D:/SDKs/asiosdk" "D:/asiosdk")
+            if(EXISTS "${candidate}/common/iasiodrv.h")
+                set(ASIO_SDK_DIR "${candidate}")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    if(ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/iasiodrv.h")
+        message(STATUS "ASIO enabled (SDK: ${ASIO_SDK_DIR})")
+        target_include_directories(NeuralFlowAmp PUBLIC "${ASIO_SDK_DIR}/common")
+        target_compile_definitions(NeuralFlowAmp PUBLIC JUCE_ASIO=1)
+    else()
+        message(STATUS "ASIO disabled: ASIO SDK not found (set ASIO_SDK_DIR, see CMakeLists.txt)")
+    endif()
+endif()
 
 # Required JUCE modules
 target_link_libraries(NeuralFlowAmp PRIVATE

@@ -154,6 +154,15 @@ public:
     {
         auto r = button.getLocalBounds().toFloat().reduced (0.5f);
 
+        if (! button.isEnabled())
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.02f));
+            g.fillRoundedRectangle (r, 5.0f);
+            g.setColour (juce::Colour (0xff262b32));
+            g.drawRoundedRectangle (r, 5.0f, 1.0f);
+            return;
+        }
+
         g.setColour (down ? Theme::accent.withAlpha (0.25f)
                           : highlighted ? Theme::accent.withAlpha (0.14f)
                                         : juce::Colours::white.withAlpha (0.05f));
@@ -166,7 +175,7 @@ public:
     void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool highlighted, bool) override
     {
         g.setFont (getTextButtonFont (button, button.getHeight()));
-        g.setColour (highlighted ? Theme::accent.brighter (0.3f) : Theme::textHi);
+        g.setColour (! button.isEnabled() ? Theme::textLo : highlighted ? Theme::accent.brighter (0.3f) : Theme::textHi);
         g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
     }
 };

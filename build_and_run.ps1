@@ -1,14 +1,14 @@
 $env:VSLANG = "1033"
 
-$exePath = "build\NeuralFlowAmp_artefacts\Release\Standalone\NeuralFlowAmp.exe"
-$processName = "NeuralFlowAmp"
+$exePath = "build\NeuralFlowAmp_artefacts\Release\Standalone\Tini.exe"
+$processName = "Tini"
 
 # Auto close
 Stop-Process -Name $processName -Force -ErrorAction SilentlyContinue
 
 Clear-Host
 Write-Host "===========================================" -ForegroundColor Cyan
-Write-Host "  [///] NEURAL FLOW AMP BUILD SYSTEM [///] " -ForegroundColor Cyan
+Write-Host "  [///]     TINI BUILD SYSTEM     [///]" -ForegroundColor Cyan
 Write-Host "===========================================" -ForegroundColor Cyan
 Write-Host ""
 

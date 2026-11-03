@@ -23,6 +23,19 @@ NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
 #endif
 {
 	formatManager.registerBasicFormats();
+
+    for (int item = 0; item < PedalCatalog::ampItem; ++item)
+    {
+        auto& cache = pedalParams[(size_t) item];
+        cache.on = apvts.getRawParameterValue(PedalCatalog::onId(item));
+
+        const auto added = PedalCatalog::addedId(item);
+        cache.added = added.isNotEmpty() ? apvts.getRawParameterValue(added) : nullptr;
+
+        const auto& knobs = PedalCatalog::pedalOf(item).knobs;
+        for (size_t k = 0; k < knobs.size(); ++k)
+            cache.knob[k] = apvts.getRawParameterValue(PedalCatalog::knobId(item, (int) k));
+    }
 }
 
 NeuralFlowAmpAudioProcessor::~NeuralFlowAmpAudioProcessor()
@@ -67,24 +80,29 @@ double NeuralFlowAmpAudioProcessor::getTailLengthSeconds() const
     return 0.0;
 }
 
+// The host sees the factory presets as its programs (the list of user presets can change while
+// the host is reading it, so it stays out of here).
 int NeuralFlowAmpAudioProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
+    return juce::jmax (1, presets.getNumFactory());
 }
 
 int NeuralFlowAmpAudioProcessor::getCurrentProgram()
 {
-    return 0;
+    return currentProgram;
 }
 
 void NeuralFlowAmpAudioProcessor::setCurrentProgram (int index)
 {
+    // Some hosts echo the current program back after restoring a session: that must not
+    // throw away the restored settings.
+    if (index != currentProgram && juce::isPositiveAndBelow (index, presets.getNumFactory()))
+        loadPreset (index);
 }
 
 const juce::String NeuralFlowAmpAudioProcessor::getProgramName (int index)
 {
-    return {};
+    return juce::isPositiveAndBelow (index, presets.getNumFactory()) ? presets.get (index).name : juce::String();
 }
 
 void NeuralFlowAmpAudioProcessor::changeProgramName (int index, const juce::String& newName)
@@ -109,29 +127,33 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 	cabHighCut.prepare(spec);
 	lastLowCutHz = lastHighCutHz = -1.0f; // force coefficient refresh
 
-	compressor.prepare(spec);
-	compressor.setRatio(4.0f);
-	compressor.setRelease(120.0f);
 	compressorDry.setSize((int)spec.numChannels, samplesPerBlock);
-	overdrive.prepare(spec);
-	overdriveGain.prepare(spec);
 
-	noiseGate.prepare(spec);
-	noiseGate.setRatio(10.0f);
-	noiseGate.setAttack(1.0f);
+	for (size_t c = 0; c < (size_t) copies; ++c)
+	{
+		compressor[c].prepare(spec);
+		compressor[c].setRatio(4.0f);
+		compressor[c].setRelease(120.0f);
 
-	boost.prepare(spec);
-	boost.setRampDurationSeconds(0.02);
+		overdrive[c].prepare(spec);
+		overdriveGain[c].prepare(spec);
+		// Tube overdrive using tanh function
+		overdrive[c].functionToUse = [](float x) { return std::tanh(x); };
 
-	chorus.prepare(spec);
-	chorus.setCentreDelay(7.0f);
-	chorus.setFeedback(0.0f);
+		noiseGate[c].prepare(spec);
+		noiseGate[c].setRatio(10.0f);
+		noiseGate[c].setAttack(1.0f);
 
-	delayFx.prepare(spec);
-	reverb.prepare(spec);
+		boost[c].prepare(spec);
+		boost[c].setRampDurationSeconds(0.02);
 
-	// Tube overdrive using tanh function
-	overdrive.functionToUse = [](float x) { return std::tanh(x); };
+		chorus[c].prepare(spec);
+		chorus[c].setCentreDelay(7.0f);
+		chorus[c].setFeedback(0.0f);
+
+		delayFx[c].prepare(spec);
+		reverb[c].prepare(spec);
+	}
 }
 
 void NeuralFlowAmpAudioProcessor::releaseResources()
@@ -183,12 +205,17 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     juce::dsp::ProcessContextReplacing<float> context(block);
 
     // 3. THE CHAIN: pedals and the amp, in the order the user arranged them
-    const auto order = PedalCatalog::unpackOrder(chainOrder.load());
-    for (int item : order)
     {
-        if (item == PedalCatalog::ampItem)
+        const juce::SpinLock::ScopedTryLockType lock(chainLock);
+        if (lock.isLocked())
+            audioOrder = chainOrder;
+    }
+
+    for (int item : audioOrder)
+    {
+        if (PedalCatalog::isAmp(item))
             processAmp(buffer, context);
-        else
+        else if (isPedalActive(item))
             processPedal(item, buffer, context);
     }
 
@@ -219,106 +246,97 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 }
 
 //==============================================================================
+bool NeuralFlowAmpAudioProcessor::isPedalActive (int item) const
+{
+    const auto& cache = pedalParams[(size_t) item];
+    return cache.on->load() > 0.5f && (cache.added == nullptr || cache.added->load() > 0.5f);
+}
+
 void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<float>& buffer,
                                                 juce::dsp::ProcessContextReplacing<float>& context)
 {
-    auto raw = [this](const char* id) { return apvts.getRawParameterValue(id)->load(); };
-    auto pedalActive = [&](const char* added, const char* on) { return raw(added) > 0.5f && raw(on) > 0.5f; };
+    const auto& params = pedalParams[(size_t) item];
+    const auto c = (size_t) PedalCatalog::copyOf(item);
 
-    switch (item)
+    switch (PedalCatalog::typeOf(item))
     {
     case 0: // Noise gate
-        if (pedalActive("GATE_ADDED", "GATE_ON"))
-        {
-            noiseGate.setThreshold(raw("GATE_THRESH"));
-            noiseGate.setRelease(raw("GATE_REL"));
-            noiseGate.process(context);
-        }
+        noiseGate[c].setThreshold(params.value(0));
+        noiseGate[c].setRelease(params.value(1));
+        noiseGate[c].process(context);
         break;
 
     case 1: // Compressor
-        if (raw("COMP_ON") > 0.5f)
-        {
-            const auto sustain = raw("COMP_SUST");
-            const auto attack = raw("COMP_ATT");
-            const auto blend = raw("COMP_MIX") / 100.0f;
-            const auto makeup = juce::Decibels::decibelsToGain(raw("COMP_LVL"));
+    {
+        const auto sustain = params.value(0);
+        const auto attack = params.value(1);
+        const auto blend = params.value(2) / 100.0f;
+        const auto makeup = juce::Decibels::decibelsToGain(params.value(3));
 
-            const int numCh = buffer.getNumChannels();
-            const int numSamples = buffer.getNumSamples();
+        const int numCh = buffer.getNumChannels();
+        const int numSamples = buffer.getNumSamples();
 
-            // keep a dry copy for parallel compression (no reallocation once prepared)
-            compressorDry.setSize(numCh, numSamples, false, false, true);
-            for (int ch = 0; ch < numCh; ++ch)
-                compressorDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+        // keep a dry copy for parallel compression (no reallocation once prepared)
+        compressorDry.setSize(numCh, numSamples, false, false, true);
+        for (int ch = 0; ch < numCh; ++ch)
+            compressorDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
 
-            compressor.setThreshold(juce::jmap(sustain, 0.0f, 100.0f, 0.0f, -40.0f));
-            compressor.setAttack(attack);
-            compressor.process(context);
+        compressor[c].setThreshold(juce::jmap(sustain, 0.0f, 100.0f, 0.0f, -40.0f));
+        compressor[c].setAttack(attack);
+        compressor[c].process(context);
 
-            // blend wet/dry, then apply the output level
-            buffer.applyGain(blend);
-            for (int ch = 0; ch < numCh; ++ch)
-                buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - blend);
-            buffer.applyGain(makeup);
-        }
+        // blend wet/dry, then apply the output level
+        buffer.applyGain(blend);
+        for (int ch = 0; ch < numCh; ++ch)
+            buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - blend);
+        buffer.applyGain(makeup);
         break;
+    }
 
     case 2: // Boost
-        if (pedalActive("BOOST_ADDED", "BOOST_ON"))
-        {
-            boost.setGainDecibels(raw("BOOST_GAIN"));
-            boost.process(context);
-        }
+        boost[c].setGainDecibels(params.value(0));
+        boost[c].process(context);
         break;
 
     case 3: // Overdrive
-        if (raw("OD_ON") > 0.5f)
-        {
-            const auto odGain = raw("OD_GAIN");
-            const auto odLvl = raw("OD_LVL");
-            overdriveGain.setGainLinear(juce::Decibels::decibelsToGain(odGain * 2.0f));
-            const float odOutputMultiplier = juce::jmap(odLvl, 0.0f, 10.0f, 0.0f, 2.0f);
+    {
+        const auto odGain = params.value(0);
+        const auto odLvl = params.value(2);
+        overdriveGain[c].setGainLinear(juce::Decibels::decibelsToGain(odGain * 2.0f));
+        const float odOutputMultiplier = juce::jmap(odLvl, 0.0f, 10.0f, 0.0f, 2.0f);
 
-            overdriveGain.process(context);
-            overdrive.process(context);
-            buffer.applyGain(odOutputMultiplier);
-        }
+        overdriveGain[c].process(context);
+        overdrive[c].process(context);
+        buffer.applyGain(odOutputMultiplier);
         break;
+    }
 
     case 4: // Chorus
-        if (pedalActive("CHORUS_ADDED", "CHORUS_ON"))
-        {
-            chorus.setRate(raw("CHORUS_RATE"));
-            chorus.setDepth(raw("CHORUS_DEPTH") / 100.0f);
-            chorus.setMix(raw("CHORUS_MIX") / 100.0f);
-            chorus.process(context);
-        }
+        chorus[c].setRate(params.value(0));
+        chorus[c].setDepth(params.value(1) / 100.0f);
+        chorus[c].setMix(params.value(2) / 100.0f);
+        chorus[c].process(context);
         break;
 
     case 5: // Delay
-        if (pedalActive("DELAY_ADDED", "DELAY_ON"))
-        {
-            delayFx.setParameters(raw("DELAY_TIME"), raw("DELAY_FB") / 100.0f, raw("DELAY_MIX") / 100.0f);
-            delayFx.process(buffer);
-        }
+        delayFx[c].setParameters(params.value(0), params.value(1) / 100.0f, params.value(2) / 100.0f);
+        delayFx[c].process(buffer);
         break;
 
     case 6: // Reverb
-        if (pedalActive("REVERB_ADDED", "REVERB_ON"))
-        {
-            const float mix = raw("REVERB_MIX") / 100.0f;
+    {
+        const float mix = params.value(2) / 100.0f;
 
-            juce::dsp::Reverb::Parameters reverbParams;
-            reverbParams.roomSize = raw("REVERB_SIZE") / 100.0f;
-            reverbParams.damping = raw("REVERB_DAMP") / 100.0f;
-            reverbParams.width = 1.0f;
-            reverbParams.dryLevel = 0.5f;          // juce::Reverb scales dry by 2, so 0.5 = unity
-            reverbParams.wetLevel = mix * 0.33f;   // wet is scaled by 3
-            reverb.setParameters(reverbParams);
-            reverb.process(context);
-        }
+        juce::dsp::Reverb::Parameters reverbParams;
+        reverbParams.roomSize = params.value(0) / 100.0f;
+        reverbParams.damping = params.value(1) / 100.0f;
+        reverbParams.width = 1.0f;
+        reverbParams.dryLevel = 0.5f;          // juce::Reverb scales dry by 2, so 0.5 = unity
+        reverbParams.wetLevel = mix * 0.33f;   // wet is scaled by 3
+        reverb[c].setParameters(reverbParams);
+        reverb[c].process(context);
         break;
+    }
 
     default:
         jassertfalse;
@@ -382,13 +400,95 @@ void NeuralFlowAmpAudioProcessor::processAmp (juce::AudioBuffer<float>& buffer,
 //==============================================================================
 PedalCatalog::ChainOrder NeuralFlowAmpAudioProcessor::getChainOrder() const
 {
-    return PedalCatalog::unpackOrder(chainOrder.load());
+    const juce::SpinLock::ScopedLockType lock(chainLock);
+    return chainOrder;
 }
 
 void NeuralFlowAmpAudioProcessor::setChainOrder (const PedalCatalog::ChainOrder& order)
 {
-    if (PedalCatalog::isValidOrder(order))
-        chainOrder.store(PedalCatalog::packOrder(order));
+    if (! PedalCatalog::isValidOrder(order))
+        return;
+
+    const juce::SpinLock::ScopedLockType lock(chainLock);
+    chainOrder = order;
+}
+
+//==============================================================================
+bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, presets.size()))
+        return false;
+
+    const auto preset = presets.get (index);   // copy: loading the IR etc. must not depend on the list staying put
+
+    PresetManager::applyValues (preset, apvts);
+    setChainOrder (preset.order);
+
+    if (preset.irPath.isNotEmpty())
+        loadImpulseResponse (juce::File (preset.irPath));   // ignored if the file is gone
+
+    currentPresetName = preset.name;
+    if (index < presets.getNumFactory())
+        currentProgram = index;
+
+    return true;
+}
+
+int NeuralFlowAmpAudioProcessor::saveCurrentAsPreset (const juce::String& name)
+{
+    PresetManager::Preset preset;
+    preset.name = name;
+    preset.values = PresetManager::captureValues (apvts);
+    preset.order = getChainOrder();
+    preset.irPath = loadedIrFile.existsAsFile() ? loadedIrFile.getFullPathName() : juce::String();
+
+    const int index = presets.saveUserPreset (std::move (preset));
+    if (index >= 0)
+        currentPresetName = presets.get (index).name;
+
+    return index;
+}
+
+juce::Result NeuralFlowAmpAudioProcessor::renamePreset (int index, const juce::String& newName)
+{
+    if (! juce::isPositiveAndBelow (index, presets.size()))
+        return juce::Result::fail ("No such preset");
+
+    const bool wasCurrent = index == getCurrentPresetIndex();
+    auto result = presets.renameUserPreset (index, newName);
+
+    if (result.wasOk() && wasCurrent)
+        currentPresetName = newName.trim();
+
+    return result;
+}
+
+bool NeuralFlowAmpAudioProcessor::deletePreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, presets.size()))
+        return false;
+
+    const bool wasCurrent = index == getCurrentPresetIndex();
+    const bool ok = presets.deleteUserPreset (index);
+
+    if (ok && wasCurrent)
+        currentPresetName = {};   // the settings stay, they are just untitled now
+
+    return ok;
+}
+
+int NeuralFlowAmpAudioProcessor::getCurrentPresetIndex() const
+{
+    return currentPresetName.isEmpty() ? -1 : presets.indexOf (currentPresetName);
+}
+
+bool NeuralFlowAmpAudioProcessor::isPresetModified() const
+{
+    const int index = getCurrentPresetIndex();
+    if (index < 0)
+        return false;
+
+    return ! PresetManager::matches (presets.get (index), apvts, getChainOrder());
 }
 
 //==============================================================================
@@ -408,7 +508,8 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
     // Parameters plus the path of the loaded IR, stored as XML.
     auto state = apvts.copyState();
     state.setProperty("irPath", loadedIrFile.getFullPathName(), nullptr);
-    state.setProperty("chainOrder", (int) chainOrder.load(), nullptr);
+    state.setProperty("chain", PedalCatalog::orderToString(getChainOrder()), nullptr);
+    state.setProperty("presetName", currentPresetName, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
@@ -426,13 +527,17 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
 
     // Pedal / amp order (older sessions have none: keep the default)
     auto order = PedalCatalog::defaultOrder();
-    if (state.hasProperty("chainOrder"))
-    {
-        const auto loaded = PedalCatalog::unpackOrder((juce::uint32)(int) state.getProperty("chainOrder"));
-        if (PedalCatalog::isValidOrder(loaded))
-            order = loaded;
-    }
+    if (state.hasProperty("chain"))
+        PedalCatalog::orderFromString(state.getProperty("chain").toString(), order);
+    else if (state.hasProperty("chainOrder"))   // sessions saved by version 1
+        PedalCatalog::orderFromLegacy((juce::uint32)(int) state.getProperty("chainOrder"), order);
     setChainOrder(order);
+
+    // Which preset the session was based on (the values above stay as saved, edits included)
+    currentPresetName = state.getProperty("presetName").toString();
+    const int restored = presets.indexOf(currentPresetName);
+    if (restored >= 0 && restored < presets.getNumFactory())
+        currentProgram = restored;
 
     // The IR itself is not embedded: reload it if the file is still there.
     const juce::File irFile(state.getProperty("irPath").toString());
@@ -456,57 +561,61 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     params.push_back(std::make_unique<juce::AudioParameterFloat>("HIGH", "High", 0.0f, 10.0f, 5.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("MASTER", "Master", 0.0f, 10.0f, 5.0f));
 
-    // Compressor
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_SUST", "Sustain", 0.0f, 100.0f, 50.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_ATT", "Attack", 0.0f, 100.0f, 10.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_MIX", "Blend", 0.0f, 100.0f, 100.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("COMP_LVL", "Level", -12.0f, 12.0f, 0.0f));
-
-
-    // Overdrive
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("OD_GAIN", "Gain", 0.0f, 10.0f, 3.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("OD_TONE", "Tone", 0.0f, 10.0f, 5.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("OD_LVL", "Level", 0.0f, 10.0f, 5.0f));
-
-    // Pedal bypass switches (true = pedal active)
-    params.push_back(std::make_unique<juce::AudioParameterBool>("COMP_ON", "Compressor On", true));
-    params.push_back(std::make_unique<juce::AudioParameterBool>("OD_ON", "Overdrive On", true));
-
-    // Add-on pedals. *_ADDED says whether the pedal is in the chain (set from the UI).
-    auto addPedalSwitches = [&params](const juce::String& id, const juce::String& name)
+    // Pedals. Every pedal type exists maxCopies times; copy 0 keeps the plain ids, the others get a
+    // "_2", "_3" suffix (see PedalCatalog::suffixedId). *_ADDED says whether a copy is in the chain
+    // (set from the UI); copy 0 of the compressor and overdrive is permanent and has no such switch.
+    for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
     {
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            juce::ParameterID(id + "_ADDED", 1), name + " In Chain", false,
-            juce::AudioParameterBoolAttributes().withAutomatable(false)));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(id + "_ON", name + " On", true));
-    };
-    auto addFloat = [&params](const juce::String& id, const juce::String& name, float lo, float hi, float def, float skew = 1.0f)
-    {
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(id, name,
-            juce::NormalisableRange<float>(lo, hi, 0.0f, skew), def));
-    };
+        auto id   = [copy](const juce::String& base) { return PedalCatalog::suffixedId(base, copy); };
+        auto name = [copy](const juce::String& n) { return copy == 0 ? n : n + " " + juce::String(copy + 1); };
 
-    addPedalSwitches("GATE", "Gate");
-    addFloat("GATE_THRESH", "Gate Threshold", -80.0f, -20.0f, -55.0f);
-    addFloat("GATE_REL", "Gate Release", 10.0f, 500.0f, 120.0f, 0.5f);
+        auto addFloat = [&](const juce::String& base, const juce::String& n, float lo, float hi, float def, float skew = 1.0f)
+        {
+            params.push_back(std::make_unique<juce::AudioParameterFloat>(id(base), name(n),
+                juce::NormalisableRange<float>(lo, hi, 0.0f, skew), def));
+        };
+        auto addSwitches = [&](const juce::String& base, const juce::String& n, bool permanentFirstCopy)
+        {
+            if (! (permanentFirstCopy && copy == 0))
+                params.push_back(std::make_unique<juce::AudioParameterBool>(
+                    juce::ParameterID(id(base + "_ADDED"), 1), name(n) + " In Chain", false,
+                    juce::AudioParameterBoolAttributes().withAutomatable(false)));
+            params.push_back(std::make_unique<juce::AudioParameterBool>(id(base + "_ON"), name(n) + " On", true));
+        };
 
-    addPedalSwitches("BOOST", "Boost");
-    addFloat("BOOST_GAIN", "Boost Gain", 0.0f, 24.0f, 6.0f);
+        addSwitches("GATE", "Gate", false);
+        addFloat("GATE_THRESH", "Gate Threshold", -80.0f, -20.0f, -55.0f);
+        addFloat("GATE_REL", "Gate Release", 10.0f, 500.0f, 120.0f, 0.5f);
 
-    addPedalSwitches("CHORUS", "Chorus");
-    addFloat("CHORUS_RATE", "Chorus Rate", 0.1f, 8.0f, 1.2f, 0.5f);
-    addFloat("CHORUS_DEPTH", "Chorus Depth", 0.0f, 100.0f, 40.0f);
-    addFloat("CHORUS_MIX", "Chorus Mix", 0.0f, 100.0f, 50.0f);
+        addSwitches("COMP", "Compressor", true);
+        addFloat("COMP_SUST", "Sustain", 0.0f, 100.0f, 50.0f);
+        addFloat("COMP_ATT", "Attack", 0.0f, 100.0f, 10.0f);
+        addFloat("COMP_MIX", "Blend", 0.0f, 100.0f, 100.0f);
+        addFloat("COMP_LVL", "Level", -12.0f, 12.0f, 0.0f);
 
-    addPedalSwitches("DELAY", "Delay");
-    addFloat("DELAY_TIME", "Delay Time", 40.0f, 1000.0f, 380.0f, 0.6f);
-    addFloat("DELAY_FB", "Delay Feedback", 0.0f, 90.0f, 35.0f);
-    addFloat("DELAY_MIX", "Delay Mix", 0.0f, 100.0f, 30.0f);
+        addSwitches("BOOST", "Boost", false);
+        addFloat("BOOST_GAIN", "Boost Gain", 0.0f, 24.0f, 6.0f);
 
-    addPedalSwitches("REVERB", "Reverb");
-    addFloat("REVERB_SIZE", "Reverb Size", 0.0f, 100.0f, 50.0f);
-    addFloat("REVERB_DAMP", "Reverb Damping", 0.0f, 100.0f, 50.0f);
-    addFloat("REVERB_MIX", "Reverb Mix", 0.0f, 100.0f, 25.0f);
+        addSwitches("OD", "Overdrive", true);
+        addFloat("OD_GAIN", "Gain", 0.0f, 10.0f, 3.0f);
+        addFloat("OD_TONE", "Tone", 0.0f, 10.0f, 5.0f);
+        addFloat("OD_LVL", "Level", 0.0f, 10.0f, 5.0f);
+
+        addSwitches("CHORUS", "Chorus", false);
+        addFloat("CHORUS_RATE", "Chorus Rate", 0.1f, 8.0f, 1.2f, 0.5f);
+        addFloat("CHORUS_DEPTH", "Chorus Depth", 0.0f, 100.0f, 40.0f);
+        addFloat("CHORUS_MIX", "Chorus Mix", 0.0f, 100.0f, 50.0f);
+
+        addSwitches("DELAY", "Delay", false);
+        addFloat("DELAY_TIME", "Delay Time", 40.0f, 1000.0f, 380.0f, 0.6f);
+        addFloat("DELAY_FB", "Delay Feedback", 0.0f, 90.0f, 35.0f);
+        addFloat("DELAY_MIX", "Delay Mix", 0.0f, 100.0f, 30.0f);
+
+        addSwitches("REVERB", "Reverb", false);
+        addFloat("REVERB_SIZE", "Reverb Size", 0.0f, 100.0f, 50.0f);
+        addFloat("REVERB_DAMP", "Reverb Damping", 0.0f, 100.0f, 50.0f);
+        addFloat("REVERB_MIX", "Reverb Mix", 0.0f, 100.0f, 25.0f);
+    }
 
     // Cab filters (defaults are fully open, i.e. transparent)
     params.push_back(std::make_unique<juce::AudioParameterFloat>("CAB_LOWCUT", "Cab Low Cut",

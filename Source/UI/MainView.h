@@ -1,8 +1,10 @@
 #pragma once
 
 #include "../PluginProcessor.h"
+#include "../LatencyProbe.h"
 #include "NeuralLookAndFeel.h"
 #include "Panels.h"
+#include "PresetBar.h"
 
 /** The whole UI, laid out in a fixed design space (Theme::designWidth x designHeight).
     The editor scales this component to whatever window size the user picks. */
@@ -12,12 +14,13 @@ public:
     explicit MainView (NeuralFlowAmpAudioProcessor& p)
         : processor (p),
           inputMeter ("INPUT"), outputMeter ("OUTPUT"),
-          lead (p.apvts), chain (p), cabPanel (p)
+          presetBar (p), lead (p.apvts), chain (p), cabPanel (p)
     {
         setLookAndFeel (&laf);
 
         addAndMakeVisible (inputMeter);
         addAndMakeVisible (outputMeter);
+        addAndMakeVisible (presetBar);
         addAndMakeVisible (lead);
         addAndMakeVisible (chain);
         addAndMakeVisible (cabPanel);
@@ -45,6 +48,9 @@ public:
 
     void resized() override
     {
+        presetBar.setBounds (juce::Rectangle<int> (PresetBar::width, PresetBar::height)
+                                 .withCentre ({ getWidth() / 2, headerH / 2 }));
+
         auto b = getLocalBounds();
         b.removeFromTop (headerH);
         b.removeFromBottom (footerH);
@@ -74,24 +80,11 @@ private:
         g.setColour (Theme::divider);
         g.fillRect (r.getX(), r.getBottom() - 1.0f, r.getWidth(), 1.0f);
 
-        // logo: five bars, a tiny waveform
-        const float bx = 26.0f, by = r.getCentreY();
-        const float heights[] = { 8.0f, 16.0f, 24.0f, 14.0f, 6.0f };
-        for (int i = 0; i < 5; ++i)
-        {
-            g.setColour (Theme::accent.withAlpha (i == 2 ? 1.0f : 0.65f));
-            g.fillRoundedRectangle (bx + (float) i * 6.0f, by - heights[i] * 0.5f, 3.0f, heights[i], 1.5f);
-        }
-
-        // wordmark
-        const auto font = Theme::ui (19.0f, true, 0.16f);
-        const juce::String neural = "NEURAL FLOW", amp = " AMP";
-        const float nw = font.getStringWidthFloat (neural);
-        g.setFont (font);
+        // product name (text only, no logo mark)
+        g.setFont (Theme::ui (24.0f, true));
         g.setColour (Theme::textHi);
-        g.drawText (neural, juce::Rectangle<float> (68.0f, r.getY(), nw + 4.0f, r.getHeight()), juce::Justification::centredLeft, false);
-        g.setColour (Theme::accent);
-        g.drawText (amp, juce::Rectangle<float> (68.0f + nw, r.getY(), 80.0f, r.getHeight()), juce::Justification::centredLeft, false);
+        g.drawText (juce::String (juce::CharPointer_UTF8 ("t\xc4\xb1n\xc4\xb1")),   // "tını"
+                    juce::Rectangle<float> (26.0f, r.getY(), 200.0f, r.getHeight()), juce::Justification::centredLeft, false);
 
         // audio engine chip
         const auto chipFont = Theme::mono (11.0f);
@@ -117,7 +110,7 @@ private:
         r = r.reduced (26.0f, 0.0f);
         g.setColour (Theme::textLo);
         g.setFont (Theme::ui (10.0f, true, 0.18f));
-        g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc2\xa9")) + " 2026 NEURAL FLOW", r, juce::Justification::centredLeft, false);
+        g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc2\xa9 2026 TINI")), r, juce::Justification::centredLeft, false);
         g.drawText ("v" + juce::String (JucePlugin_VersionString), r, juce::Justification::centredRight, false);
     }
 
@@ -139,6 +132,7 @@ private:
         outputMeter.pushLevel (outDb);
         cabPanel.setLevel (Theme::dbToUnit (outDb, -48.0f));
 
+        presetBar.refresh();
         chain.refresh();
 
         if (++frame % 30 == 0)
@@ -150,9 +144,21 @@ private:
         const double sr = processor.getSampleRate();
         const int block = processor.getBlockSize();
 
+        // The old readout was just one buffer (block / sampleRate), which is far below what you
+        // actually hear. In the standalone we can ask the device for its real in + out latency;
+        // inside a DAW only the buffer size is known, so no millisecond figure is shown.
+        const auto device = LatencyProbe::query();
+        const double roundTrip = LatencyProbe::roundTripMs (device, processor.getLatencySamples());
+
         juce::String text = "AUDIO  " + juce::String (sr / 1000.0, 1) + " kHz";
         if (block > 0 && sr > 0.0)
-            text << "  |  " << block << " smp  |  " << juce::String (1000.0 * block / sr, 1) << " ms";
+            text << "  |  " << block << " smp";
+
+        if (device.valid && device.driverName.isNotEmpty())
+            text << "  |  " << device.driverName;
+
+        if (roundTrip >= 0.0)
+            text << "  |  " << juce::String::charToString (0x2248) << " " << juce::String (roundTrip, 1) << " ms";
 
         if (text != audioInfo)
         {
@@ -166,6 +172,7 @@ private:
     NeuralLookAndFeel laf;
 
     LevelMeter inputMeter, outputMeter;
+    PresetBar presetBar;
     LeadChannelPanel lead;
     SignalChainPanel chain;
     CabPanel cabPanel;

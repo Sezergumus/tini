@@ -4,6 +4,7 @@
 #include "Crunch.h"
 #include "DSP/StereoDelay.h"
 #include "PedalCatalog.h"
+#include "PresetManager.h"
 
 //==============================================================================
 /**
@@ -61,9 +62,31 @@ public:
     void loadImpulseResponse(const juce::File& file);
 
     /** Order of the pedals and the amp in the signal chain (item numbers, see PedalCatalog).
-        Safe to call from the UI while audio is running. */
+        Safe to call from the UI while audio is running. Items whose "added" switch is off are
+        parked in the order and not processed. */
     PedalCatalog::ChainOrder getChainOrder() const;
     void setChainOrder(const PedalCatalog::ChainOrder& order);
+
+    //==============================================================================
+    // Presets (message thread only). Factory presets are also exposed to the host as programs.
+    PresetManager presets;
+
+    /** Applies preset `index` of `presets`: all parameters, the chain order and, if it has one, the IR. */
+    bool loadPreset (int index);
+
+    /** Saves the current pedals, settings, order and IR under `name` (overwrites a user preset of
+        that name). Returns the preset's index, or -1 if the name is not allowed / writing failed. */
+    int saveCurrentAsPreset (const juce::String& name);
+
+    /** Renames / deletes one of the user's presets (factory presets cannot be changed). */
+    juce::Result renamePreset (int index, const juce::String& newName);
+    bool deletePreset (int index);
+
+    /** Index in `presets` of the preset that was loaded last, or -1 for an untitled setup. */
+    int getCurrentPresetIndex() const;
+
+    /** True if something was changed since the current preset was loaded. */
+    bool isPresetModified() const;
 
     juce::File loadedIrFile; // last IR chosen by the user (message thread only)
 
@@ -77,9 +100,27 @@ private:
     }
 
     void processPedal(int item, juce::AudioBuffer<float>& buffer, juce::dsp::ProcessContextReplacing<float>& context);
+    bool isPedalActive(int item) const;
     void processAmp(juce::AudioBuffer<float>& buffer, juce::dsp::ProcessContextReplacing<float>& context);
 
-    std::atomic<juce::uint32> chainOrder { PedalCatalog::packOrder(PedalCatalog::defaultOrder()) };
+    // The UI writes `chainOrder` under the lock; the audio thread copies it into `audioOrder`
+    // with a try-lock once per block (it keeps the previous order if the UI holds the lock).
+    juce::SpinLock chainLock;
+    PedalCatalog::ChainOrder chainOrder = PedalCatalog::defaultOrder();
+    PedalCatalog::ChainOrder audioOrder = PedalCatalog::defaultOrder();
+
+    /** Cached parameter pointers of one pedal copy, so the audio thread never looks up ids by name. */
+    struct PedalParams
+    {
+        std::atomic<float>* on = nullptr;
+        std::atomic<float>* added = nullptr;               // nullptr = permanent
+        std::array<std::atomic<float>*, 4> knob {};
+        float value (int i) const { return knob[(size_t) i]->load(); }
+    };
+    std::array<PedalParams, PedalCatalog::ampItem> pedalParams;
+
+    juce::String currentPresetName; // empty = untitled
+    int currentProgram = 0;         // factory preset last reported to the host
 
     using CabFilter = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Coefficients<float>>;
     CabFilter cabLowCut, cabHighCut;
@@ -95,17 +136,19 @@ private:
 	juce::dsp::ProcessorChain<EqBand, EqBand, EqBand> eqChain;
 	float lastLowDb = 1000.0f, lastMidDb = 1000.0f, lastHighDb = 1000.0f;
 
-    juce::dsp::Compressor<float> compressor;
-    juce::AudioBuffer<float> compressorDry; // untouched copy for the blend knob
-    juce::dsp::WaveShaper<float> overdrive;
-    juce::dsp::Gain<float> overdriveGain;
+    // One processor per pedal copy (index = copy). A pedal only runs while its "added" and "on"
+    // parameters are true.
+    static constexpr int copies = PedalCatalog::maxCopies;
+    std::array<juce::dsp::Compressor<float>, copies> compressor;
+    juce::AudioBuffer<float> compressorDry; // untouched copy for the blend knob (shared scratch)
+    std::array<juce::dsp::WaveShaper<float>, copies> overdrive;
+    std::array<juce::dsp::Gain<float>, copies> overdriveGain;
 
-    // Add-on pedals (only processed while their *_ADDED and *_ON parameters are true)
-    juce::dsp::NoiseGate<float> noiseGate;
-    juce::dsp::Gain<float> boost;
-    juce::dsp::Chorus<float> chorus;
-    StereoDelay delayFx;
-    juce::dsp::Reverb reverb;
+    std::array<juce::dsp::NoiseGate<float>, copies> noiseGate;
+    std::array<juce::dsp::Gain<float>, copies> boost;
+    std::array<juce::dsp::Chorus<float>, copies> chorus;
+    std::array<StereoDelay, copies> delayFx;
+    std::array<juce::dsp::Reverb, copies> reverb;
     
     int scopeDataIndex = 0;
 
