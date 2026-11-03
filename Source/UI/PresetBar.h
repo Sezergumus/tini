@@ -15,7 +15,7 @@ public:
     /** Called with the preset's index after it was written. */
     std::function<void (int)> onSaved;
 
-    SavePresetPanel (NeuralFlowAmpAudioProcessor& p, const juce::String& suggestedName)
+    SavePresetPanel (TiniAudioProcessor& p, const juce::String& suggestedName)
         : processor (p)
     {
         nameEditor.setOpaque (false);   // rounded corners
@@ -148,7 +148,7 @@ private:
             box->dismiss();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::TextEditor nameEditor;
     juce::TextButton saveButton, cancelButton;
     juce::String hint;
@@ -208,7 +208,7 @@ public:
     static constexpr int width = 460, height = 30;      // the arrows and the name sit in the middle,
     static constexpr int navWidth = 300;                // Save appears to the right of them
 
-    explicit PresetBar (NeuralFlowAmpAudioProcessor& p)
+    explicit PresetBar (TiniAudioProcessor& p)
         : processor (p), prevButton (false), nextButton (true)
     {
         prevButton.onClick = [this] { step (-1); };
@@ -347,7 +347,7 @@ public:
     StepButton& getNextButton() { return nextButton; }
 
 private:
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     StepButton prevButton, nextButton;
     PresetNameButton nameButton;
     juce::TextButton saveButton;

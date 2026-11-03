@@ -11,7 +11,7 @@
 class TunerView : public juce::Component, private juce::Timer
 {
 public:
-    explicit TunerView (NeuralFlowAmpAudioProcessor& p)
+    explicit TunerView (TiniAudioProcessor& p)
         : processor (p), muteSwitch (Theme::accent)
     {
         // muted when opened the first time; after that the way the user left the switch
@@ -226,7 +226,7 @@ private:
         repaint();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     PitchDetector detector;
     std::vector<float> history;
     int filled = 0;

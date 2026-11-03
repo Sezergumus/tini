@@ -2,7 +2,7 @@
 #include "PluginEditor.h"
 
 //==============================================================================
-NeuralFlowAmpAudioProcessorEditor::NeuralFlowAmpAudioProcessorEditor (NeuralFlowAmpAudioProcessor& p)
+TiniAudioProcessorEditor::TiniAudioProcessorEditor (TiniAudioProcessor& p)
     : AudioProcessorEditor (&p), view (p)
 {
     addAndMakeVisible (view);
@@ -16,7 +16,7 @@ NeuralFlowAmpAudioProcessorEditor::NeuralFlowAmpAudioProcessorEditor (NeuralFlow
     setSize (Theme::designWidth, Theme::designHeight);
 }
 
-void NeuralFlowAmpAudioProcessorEditor::resized()
+void TiniAudioProcessorEditor::resized()
 {
     const float scale = (float) getWidth() / (float) Theme::designWidth;
 

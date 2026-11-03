@@ -23,14 +23,14 @@ inline juce::Colour blockColour (int block)
 //==============================================================================
 /** A NAM pedal is named after its model: the file name without its extension. Without a model it is
     just "NAM Pedal". */
-inline juce::String namPedalName (NeuralFlowAmpAudioProcessor& p, int copy)
+inline juce::String namPedalName (TiniAudioProcessor& p, int copy)
 {
     const auto file = p.pedalNam[(size_t) copy].getFile();
     return file == juce::File() ? juce::String ("NAM Pedal") : file.getFileNameWithoutExtension();
 }
 
 /** What the model of a NAM pedal says about itself (empty until the background read is done). */
-inline NamMetadata::Info namPedalInfo (NeuralFlowAmpAudioProcessor& p, int copy)
+inline NamMetadata::Info namPedalInfo (TiniAudioProcessor& p, int copy)
 {
     const auto file = p.pedalNam[(size_t) copy].getFile();
     return file.existsAsFile() ? p.metadata.get (file) : NamMetadata::Info();
@@ -315,7 +315,7 @@ public:
         BlockTile* comp;
     };
 
-    explicit ChainStrip (NeuralFlowAmpAudioProcessor& p)
+    explicit ChainStrip (TiniAudioProcessor& p)
         : processor (p), apvts (p.apvts), ampTile (PedalCatalog::ampItem, p.apvts)
     {
         addAndMakeVisible (ampTile);
@@ -636,7 +636,7 @@ private:
         }
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
     BlockTile ampTile;
     juce::ComponentAnimator animator;
@@ -760,7 +760,7 @@ private:
 class ChainBar : public juce::Component
 {
 public:
-    explicit ChainBar (NeuralFlowAmpAudioProcessor& p)
+    explicit ChainBar (TiniAudioProcessor& p)
         : processor (p), apvts (p.apvts), strip (p), cabTile (cabBlock, p.apvts)
     {
         viewport.setViewedComponent (&strip, false);
@@ -1011,7 +1011,7 @@ private:
         shownOrder = processor.getChainOrder();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
     ChainStrip strip;
     juce::Viewport viewport;

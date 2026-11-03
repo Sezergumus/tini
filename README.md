@@ -35,14 +35,14 @@ cmake -B build
 cmake --build build --config Release
 ```
 
-Outputs are in `build/NeuralFlowAmp_artefacts/Release/` (`Standalone/Tini.exe` and `VST3/Tini.vst3`).
+Outputs are in `build/Tini_artefacts/Release/` (`Standalone/Tini.exe` and `VST3/Tini.vst3`).
 `build_and_run.ps1` builds and launches the standalone.
 
 Headless DSP/UI tests:
 
 ```powershell
-cmake --build build --config Release --target NeuralFlowAmpTests
-build\NeuralFlowAmpTests_artefacts\Release\NeuralFlowAmpTests.exe
+cmake --build build --config Release --target TiniTests
+build\TiniTests_artefacts\Release\TiniTests.exe
 ```
 
 ### ASIO

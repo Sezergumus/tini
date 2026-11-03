@@ -30,7 +30,7 @@
 class MainView : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
-    explicit MainView (NeuralFlowAmpAudioProcessor& p)
+    explicit MainView (TiniAudioProcessor& p)
         : processor (p), presetBar (p), chain (p), blocks (p), library (p), footer (p)
     {
         setLookAndFeel (&laf);
@@ -343,7 +343,7 @@ private:
     }
 
     //==========================================================================
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     NeuralLookAndFeel laf;
 
     PresetBar presetBar;

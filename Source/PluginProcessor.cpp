@@ -12,7 +12,7 @@
 #include "DSP/DefaultCab.h"
 
 //==============================================================================
-NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
+TiniAudioProcessor::TiniAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
      : AudioProcessor (BusesProperties()
                      #if ! JucePlugin_IsMidiEffect
@@ -51,17 +51,17 @@ NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
     }
 }
 
-NeuralFlowAmpAudioProcessor::~NeuralFlowAmpAudioProcessor()
+TiniAudioProcessor::~TiniAudioProcessor()
 {
 }
 
 //==============================================================================
-const juce::String NeuralFlowAmpAudioProcessor::getName() const
+const juce::String TiniAudioProcessor::getName() const
 {
     return JucePlugin_Name;
 }
 
-bool NeuralFlowAmpAudioProcessor::acceptsMidi() const
+bool TiniAudioProcessor::acceptsMidi() const
 {
    #if JucePlugin_WantsMidiInput
     return true;
@@ -70,7 +70,7 @@ bool NeuralFlowAmpAudioProcessor::acceptsMidi() const
    #endif
 }
 
-bool NeuralFlowAmpAudioProcessor::producesMidi() const
+bool TiniAudioProcessor::producesMidi() const
 {
    #if JucePlugin_ProducesMidiOutput
     return true;
@@ -79,7 +79,7 @@ bool NeuralFlowAmpAudioProcessor::producesMidi() const
    #endif
 }
 
-bool NeuralFlowAmpAudioProcessor::isMidiEffect() const
+bool TiniAudioProcessor::isMidiEffect() const
 {
    #if JucePlugin_IsMidiEffect
     return true;
@@ -88,24 +88,24 @@ bool NeuralFlowAmpAudioProcessor::isMidiEffect() const
    #endif
 }
 
-double NeuralFlowAmpAudioProcessor::getTailLengthSeconds() const
+double TiniAudioProcessor::getTailLengthSeconds() const
 {
     return 0.0;
 }
 
 // The host sees the factory presets as its programs (the list of user presets can change while
 // the host is reading it, so it stays out of here).
-int NeuralFlowAmpAudioProcessor::getNumPrograms()
+int TiniAudioProcessor::getNumPrograms()
 {
     return juce::jmax (1, presets.getNumFactory());
 }
 
-int NeuralFlowAmpAudioProcessor::getCurrentProgram()
+int TiniAudioProcessor::getCurrentProgram()
 {
     return currentProgram;
 }
 
-void NeuralFlowAmpAudioProcessor::setCurrentProgram (int index)
+void TiniAudioProcessor::setCurrentProgram (int index)
 {
     // Some hosts echo the current program back after restoring a session: that must not
     // throw away the restored settings.
@@ -113,17 +113,17 @@ void NeuralFlowAmpAudioProcessor::setCurrentProgram (int index)
         loadPreset (index);
 }
 
-const juce::String NeuralFlowAmpAudioProcessor::getProgramName (int index)
+const juce::String TiniAudioProcessor::getProgramName (int index)
 {
     return juce::isPositiveAndBelow (index, presets.getNumFactory()) ? presets.get (index).name : juce::String();
 }
 
-void NeuralFlowAmpAudioProcessor::changeProgramName (int index, const juce::String& newName)
+void TiniAudioProcessor::changeProgramName (int index, const juce::String& newName)
 {
 }
 
 //==============================================================================
-void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void TiniAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
 	crunchEffect.prepare(sampleRate, samplesPerBlock);
 	nam.prepare(sampleRate, samplesPerBlock);
@@ -172,14 +172,14 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 	}
 }
 
-void NeuralFlowAmpAudioProcessor::releaseResources()
+void TiniAudioProcessor::releaseResources()
 {
     // When playback stops, you can use this as an opportunity to free up any
     // spare memory, etc.
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
-bool NeuralFlowAmpAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool TiniAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
   #if JucePlugin_IsMidiEffect
     juce::ignoreUnused (layouts);
@@ -204,7 +204,7 @@ bool NeuralFlowAmpAudioProcessor::isBusesLayoutSupported (const BusesLayout& lay
 }
 #endif
 
-void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void TiniAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
@@ -266,13 +266,13 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 }
 
 //==============================================================================
-bool NeuralFlowAmpAudioProcessor::isPedalActive (int item) const
+bool TiniAudioProcessor::isPedalActive (int item) const
 {
     const auto& cache = pedalParams[(size_t) item];
     return cache.on->load() > 0.5f && (cache.added == nullptr || cache.added->load() > 0.5f);
 }
 
-void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<float>& buffer,
+void TiniAudioProcessor::processPedal (int item, juce::AudioBuffer<float>& buffer,
                                                 juce::dsp::ProcessContextReplacing<float>& context)
 {
     const auto& params = pedalParams[(size_t) item];
@@ -387,7 +387,7 @@ void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<floa
     }
 }
 
-void NeuralFlowAmpAudioProcessor::processAmp (juce::AudioBuffer<float>& buffer,
+void TiniAudioProcessor::processAmp (juce::AudioBuffer<float>& buffer,
                                               juce::dsp::ProcessContextReplacing<float>& context)
 {
     // Preamp: a Neural Amp Modeler model if one is selected and ready, otherwise the built-in amp
@@ -447,13 +447,13 @@ void NeuralFlowAmpAudioProcessor::processAmp (juce::AudioBuffer<float>& buffer,
 }
 
 //==============================================================================
-PedalCatalog::ChainOrder NeuralFlowAmpAudioProcessor::getChainOrder() const
+PedalCatalog::ChainOrder TiniAudioProcessor::getChainOrder() const
 {
     const juce::SpinLock::ScopedLockType lock(chainLock);
     return chainOrder;
 }
 
-void NeuralFlowAmpAudioProcessor::setChainOrder (const PedalCatalog::ChainOrder& order)
+void TiniAudioProcessor::setChainOrder (const PedalCatalog::ChainOrder& order)
 {
     if (! PedalCatalog::isValidOrder(order))
         return;
@@ -463,7 +463,7 @@ void NeuralFlowAmpAudioProcessor::setChainOrder (const PedalCatalog::ChainOrder&
 }
 
 //==============================================================================
-void NeuralFlowAmpAudioProcessor::setTunerActive (bool on)
+void TiniAudioProcessor::setTunerActive (bool on)
 {
     if (on)
     {
@@ -479,7 +479,7 @@ void NeuralFlowAmpAudioProcessor::setTunerActive (bool on)
     tunerActive.store(on);
 }
 
-void NeuralFlowAmpAudioProcessor::pushTunerSamples (const float* samples, int numSamples)
+void TiniAudioProcessor::pushTunerSamples (const float* samples, int numSamples)
 {
     const int n = juce::jmin(numSamples, tunerFifo.getFreeSpace());   // the newest samples are dropped when the UI is behind
     if (n <= 0)
@@ -496,7 +496,7 @@ void NeuralFlowAmpAudioProcessor::pushTunerSamples (const float* samples, int nu
     tunerFifo.finishedWrite(size1 + size2);
 }
 
-int NeuralFlowAmpAudioProcessor::readTunerSamples (float* dest, int maxSamples)
+int TiniAudioProcessor::readTunerSamples (float* dest, int maxSamples)
 {
     const int n = juce::jmin(maxSamples, tunerFifo.getNumReady());
     if (n <= 0)
@@ -515,7 +515,7 @@ int NeuralFlowAmpAudioProcessor::readTunerSamples (float* dest, int maxSamples)
 }
 
 //==============================================================================
-bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
+bool TiniAudioProcessor::loadPreset (int index)
 {
     if (! juce::isPositiveAndBelow (index, presets.size()))
         return false;
@@ -557,7 +557,7 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
     return true;
 }
 
-int NeuralFlowAmpAudioProcessor::saveCurrentAsPreset (const juce::String& name)
+int TiniAudioProcessor::saveCurrentAsPreset (const juce::String& name)
 {
     PresetManager::Preset preset;
     preset.name = name;
@@ -578,7 +578,7 @@ int NeuralFlowAmpAudioProcessor::saveCurrentAsPreset (const juce::String& name)
     return index;
 }
 
-juce::Result NeuralFlowAmpAudioProcessor::renamePreset (int index, const juce::String& newName)
+juce::Result TiniAudioProcessor::renamePreset (int index, const juce::String& newName)
 {
     if (! juce::isPositiveAndBelow (index, presets.size()))
         return juce::Result::fail ("No such preset");
@@ -592,7 +592,7 @@ juce::Result NeuralFlowAmpAudioProcessor::renamePreset (int index, const juce::S
     return result;
 }
 
-bool NeuralFlowAmpAudioProcessor::deletePreset (int index)
+bool TiniAudioProcessor::deletePreset (int index)
 {
     if (! juce::isPositiveAndBelow (index, presets.size()))
         return false;
@@ -606,12 +606,12 @@ bool NeuralFlowAmpAudioProcessor::deletePreset (int index)
     return ok;
 }
 
-int NeuralFlowAmpAudioProcessor::getCurrentPresetIndex() const
+int TiniAudioProcessor::getCurrentPresetIndex() const
 {
     return currentPresetName.isEmpty() ? -1 : presets.indexOf (currentPresetName);
 }
 
-bool NeuralFlowAmpAudioProcessor::isPresetModified() const
+bool TiniAudioProcessor::isPresetModified() const
 {
     const int index = getCurrentPresetIndex();
     if (index < 0)
@@ -621,18 +621,18 @@ bool NeuralFlowAmpAudioProcessor::isPresetModified() const
 }
 
 //==============================================================================
-bool NeuralFlowAmpAudioProcessor::hasEditor() const
+bool TiniAudioProcessor::hasEditor() const
 {
     return true; // (change this to false if you choose to not supply an editor)
 }
 
-juce::AudioProcessorEditor* NeuralFlowAmpAudioProcessor::createEditor()
+juce::AudioProcessorEditor* TiniAudioProcessor::createEditor()
 {
-    return new NeuralFlowAmpAudioProcessorEditor (*this);
+    return new TiniAudioProcessorEditor (*this);
 }
 
 //==============================================================================
-void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void TiniAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     // Parameters plus the path of the loaded IR, stored as XML.
     auto state = apvts.copyState();
@@ -649,7 +649,7 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
         copyXmlToBinary(*xml, destData);
 }
 
-void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void TiniAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     auto xml = getXmlFromBinary(data, sizeInBytes);
 
@@ -704,10 +704,10 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
 // This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new NeuralFlowAmpAudioProcessor();
+    return new TiniAudioProcessor();
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor::createParameterLayout() {
+juce::AudioProcessorValueTreeState::ParameterLayout TiniAudioProcessor::createParameterLayout() {
 	std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>("DRIVE", "Drive", 1.0f, 100.0f, 50.0f));
@@ -803,37 +803,37 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     return { params.begin(), params.end() };
 }
 
-void NeuralFlowAmpAudioProcessor::loadNamModel(const juce::File& file)
+void TiniAudioProcessor::loadNamModel(const juce::File& file)
 {
     if (file.existsAsFile())
         nam.loadModel(file);
 }
 
-void NeuralFlowAmpAudioProcessor::loadPedalModel(int copy, const juce::File& file)
+void TiniAudioProcessor::loadPedalModel(int copy, const juce::File& file)
 {
     if (juce::isPositiveAndBelow(copy, PedalCatalog::namCopies) && file.existsAsFile())
         pedalNam[(size_t) copy].loadModel(file);
 }
 
-void NeuralFlowAmpAudioProcessor::unloadPedalModel(int copy)
+void TiniAudioProcessor::unloadPedalModel(int copy)
 {
     if (juce::isPositiveAndBelow(copy, PedalCatalog::namCopies))
         pedalNam[(size_t) copy].unload();
 }
 
-void NeuralFlowAmpAudioProcessor::unloadNamModel()
+void TiniAudioProcessor::unloadNamModel()
 {
     nam.unload();
 }
 
-void NeuralFlowAmpAudioProcessor::loadImpulseResponse(const juce::File& file) {
+void TiniAudioProcessor::loadImpulseResponse(const juce::File& file) {
 	if (file.existsAsFile()) {
 		cabSimulator.loadImpulseResponse(file, juce::dsp::Convolution::Stereo::yes, juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
 		loadedIrFile = file;
 	}
 }
 
-void NeuralFlowAmpAudioProcessor::useBuiltInCab()
+void TiniAudioProcessor::useBuiltInCab()
 {
 	// The convolution engine converts the 48 kHz buffer to the host rate itself.
 	cabSimulator.loadImpulseResponse(DefaultCab::makeBuffer(), DefaultCab::sampleRate, juce::dsp::Convolution::Stereo::no,

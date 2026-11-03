@@ -11,7 +11,7 @@
 class SettingsPage : public juce::Component
 {
 public:
-    explicit SettingsPage (NeuralFlowAmpAudioProcessor& p) : processor (p)
+    explicit SettingsPage (TiniAudioProcessor& p) : processor (p)
     {
         // Audio: the standalone owns the device; inside a DAW the host does.
         if (auto* manager = StandaloneHooks::controller().deviceManager ? StandaloneHooks::controller().deviceManager() : nullptr)
@@ -128,7 +128,7 @@ public:
     }
 
 private:
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSelector;
     juce::Viewport audioViewport;
     juce::Slider referenceSlider;

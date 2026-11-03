@@ -122,7 +122,7 @@ class LibraryPage : public juce::Component, private juce::Timer
 public:
     using Kind = FileLibrary::Kind;
 
-    explicit LibraryPage (NeuralFlowAmpAudioProcessor& p)
+    explicit LibraryPage (TiniAudioProcessor& p)
         : processor (p), list (p, Kind::amps, "Load to amp"), filterBar (list, true)
     {
         for (auto k : FileLibrary::allKinds)
@@ -662,7 +662,7 @@ private:
             countFiles();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     Kind section = Kind::amps;
     juce::OwnedArray<SectionButton> sections;
     ModelList list;

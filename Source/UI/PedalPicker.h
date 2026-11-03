@@ -19,7 +19,7 @@
 class PedalPicker : public juce::Component
 {
 public:
-    explicit PedalPicker (NeuralFlowAmpAudioProcessor& p)
+    explicit PedalPicker (TiniAudioProcessor& p)
         : processor (p), library (p, FileLibrary::Kind::pedals, "Add to chain"), filterBar (library, false)
     {
         for (int type = 0; type < PedalCatalog::count; ++type)
@@ -205,7 +205,7 @@ private:
         });
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::OwnedArray<PedalRow> rows;
     ModelList library;
     FilterBar filterBar;

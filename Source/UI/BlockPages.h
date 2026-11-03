@@ -29,7 +29,7 @@ public:
     static constexpr int height = 52;
 
     /** The amp slot of the processor. */
-    explicit ModelSlot (NeuralFlowAmpAudioProcessor& p)
+    explicit ModelSlot (TiniAudioProcessor& p)
         : ModelSlot (p, ModelTarget { p.nam,
                                       [&p] (const juce::File& f) { p.loadNamModel (f); },
                                       [&p] { p.unloadNamModel(); },
@@ -38,7 +38,7 @@ public:
     {
     }
 
-    ModelSlot (NeuralFlowAmpAudioProcessor& p, ModelTarget modelTarget)
+    ModelSlot (TiniAudioProcessor& p, ModelTarget modelTarget)
         : processor (p), target (std::move (modelTarget))
     {
         loadButton.setButtonText ("Load model");
@@ -208,7 +208,7 @@ private:
         });
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     ModelTarget target;
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> levelAttachment;
@@ -225,7 +225,7 @@ class IrSlot : public juce::Component
 public:
     static constexpr int height = 52;
 
-    explicit IrSlot (NeuralFlowAmpAudioProcessor& p) : processor (p)
+    explicit IrSlot (TiniAudioProcessor& p) : processor (p)
     {
         loadButton.setButtonText ("Load IR");
         loadButton.onClick = [this] { chooseFile(); };
@@ -359,7 +359,7 @@ private:
         repaint();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::File shownFile;
     juce::String irName { "Built-in cabinet" }, irInfo;
@@ -372,7 +372,7 @@ private:
 class AmpPage : public juce::Component
 {
 public:
-    explicit AmpPage (NeuralFlowAmpAudioProcessor& p)
+    explicit AmpPage (TiniAudioProcessor& p)
         : modelSlot (p), processor (p),
           drive  ("Drive",  Theme::accent, 1),
           namIn  ("Input",  Theme::accent, 1, " dB"),
@@ -538,7 +538,7 @@ private:
         refresh();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     LabeledKnob drive, namIn, low, mid, high, master;
     juce::Rectangle<int> segmentArea;
     std::vector<int> dividerX;
@@ -556,7 +556,7 @@ public:
 class PedalPage : public juce::Component
 {
 public:
-    PedalPage (int chainItem, NeuralFlowAmpAudioProcessor& processor)
+    PedalPage (int chainItem, TiniAudioProcessor& processor)
         : PedalPage (chainItem, processor.apvts)
     {
         if (PedalCatalog::typeOf (chainItem) != PedalCatalog::captureType)
@@ -710,7 +710,7 @@ private:
     juce::OwnedArray<LabeledKnob> knobs;
 
     // NAM pedal only
-    NeuralFlowAmpAudioProcessor* owner = nullptr;
+    TiniAudioProcessor* owner = nullptr;
     std::unique_ptr<ModelSlot> modelSlot;
     std::unique_ptr<FileBrowserList> browser;
     NamEngine* captureEngine = nullptr;
@@ -722,7 +722,7 @@ private:
 class CabPage : public juce::Component
 {
 public:
-    explicit CabPage (NeuralFlowAmpAudioProcessor& p)
+    explicit CabPage (TiniAudioProcessor& p)
         : irSlot (p), processor (p),
           lowCut  ("Low cut",  Theme::accent, 0, " Hz"),
           highCut ("High cut", Theme::accent, 1, " kHz")
@@ -793,7 +793,7 @@ public:
     FileBrowserList browser { FileLibrary::Kind::cabs };
 
 private:
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::File browsedFile;
     LabeledKnob lowCut, highCut;
 };
@@ -807,7 +807,7 @@ class BlockEditor : public juce::Component
 public:
     enum class Overlay { none, settings, tuner, addPedal };
 
-    explicit BlockEditor (NeuralFlowAmpAudioProcessor& p)
+    explicit BlockEditor (TiniAudioProcessor& p)
         : processor (p), ampPage (p), cabPage (p)
     {
         addChildComponent (ampPage);
@@ -921,7 +921,7 @@ private:
             onOverlayChanged();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     AmpPage ampPage;
     CabPage cabPage;
     std::unique_ptr<PedalPage> pedalPage;

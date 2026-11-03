@@ -1,6 +1,6 @@
 $env:VSLANG = "1033"
 
-$exePath = "build\NeuralFlowAmp_artefacts\Release\Standalone\Tini.exe"
+$exePath = "build\Tini_artefacts\Release\Standalone\Tini.exe"
 $processName = "Tini"
 
 # Auto close

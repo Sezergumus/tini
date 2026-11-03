@@ -1,19 +1,19 @@
 // Renders the editor to PNG files without opening a window, so the UI can be checked
 // (and reviewed in pull requests) on a machine without touching the desktop.
 //
-//   NeuralFlowAmpTests --snapshots <output-dir>
+//   TiniTests --snapshots <output-dir>
 #include "../Source/PluginProcessor.h"
 #include "../Source/UI/MainView.h"
 
 namespace
 {
-    void setParam (NeuralFlowAmpAudioProcessor& p, const juce::String& id, float plainValue)
+    void setParam (TiniAudioProcessor& p, const juce::String& id, float plainValue)
     {
         auto* param = p.apvts.getParameter (id);
         param->setValueNotifyingHost (param->convertTo0to1 (plainValue));
     }
 
-    void feedSine (NeuralFlowAmpAudioProcessor& p)
+    void feedSine (TiniAudioProcessor& p)
     {
         juce::MidiBuffer midi;
         for (int block = 0; block < 4; ++block)
@@ -79,7 +79,7 @@ void renderUiSnapshots (const juce::File& dir)
     FileLibrary::rootOverride().deleteRecursively();
     FileLibrary::useTrash() = false;
 
-    NeuralFlowAmpAudioProcessor p;
+    TiniAudioProcessor p;
     const auto presetFolder = dir.getChildFile ("presets_tmp");   // never touch the user's real presets
     presetFolder.deleteRecursively();
     p.presets.setUserFolder (presetFolder);

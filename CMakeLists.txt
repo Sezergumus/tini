@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(NeuralFlowAmp VERSION 1.0.0)
+project(Tini VERSION 1.0.0)
 
 # JUCE library is automatically downloaded from GitHub
 include(FetchContent)
@@ -56,13 +56,12 @@ juce_add_binary_data(InterFonts
 set_target_properties(InterFonts PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Define the project as both VST3 plugin and standalone application
-juce_add_plugin(NeuralFlowAmp
+juce_add_plugin(Tini
     COMPANY_NAME "Sezer Gumus"
     # PRODUCT_NAME is the file name (Tini.exe, Tini.vst3) and also the name shown by the DAW and
     # in the window title. It has to stay plain ASCII: JUCE passes it to the compiler as a macro
     # on the command line, where a non-ASCII letter such as the dotless i is not read as UTF-8 and
     # the window title then crashes the app when it is drawn. The UI itself writes "tını".
-    # The CMake target stays NeuralFlowAmp so existing build paths keep working.
     PRODUCT_NAME "Tini"
     BUNDLE_ID "io.github.sezergumus.tini"
     # The IDs a DAW stores in saved projects to find the plugin again: never change them after release.
@@ -79,7 +78,7 @@ juce_add_plugin(NeuralFlowAmp
 )
 
 # Include the source code files
-target_sources(NeuralFlowAmp PRIVATE
+target_sources(Tini PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
@@ -120,10 +119,10 @@ target_sources(NeuralFlowAmp PRIVATE
 # Standalone-only helpers (JucePlugin_Build_Standalone is only defined on the format target, hence the
 # separate files): StandaloneBridge reports the real audio device latency to the UI, StandaloneApp is the
 # application with a window that has no title bar (the header of the UI is the title bar; see the file).
-target_sources(NeuralFlowAmp_Standalone PRIVATE
+target_sources(Tini_Standalone PRIVATE
     Source/StandaloneBridge.cpp
     Source/StandaloneApp.cpp)
-target_compile_definitions(NeuralFlowAmp_Standalone PRIVATE JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
+target_compile_definitions(Tini_Standalone PRIVATE JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
 
 # Optional ASIO audio driver support (lowest latency on Windows).
 # Steinberg's ASIO SDK is not bundled here (you accept its licence when you get it from
@@ -148,15 +147,15 @@ if(WIN32)
 
     if(ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/iasiodrv.h")
         message(STATUS "ASIO enabled (SDK: ${ASIO_SDK_DIR})")
-        target_include_directories(NeuralFlowAmp PUBLIC "${ASIO_SDK_DIR}/common")
-        target_compile_definitions(NeuralFlowAmp PUBLIC JUCE_ASIO=1)
+        target_include_directories(Tini PUBLIC "${ASIO_SDK_DIR}/common")
+        target_compile_definitions(Tini PUBLIC JUCE_ASIO=1)
     else()
         message(STATUS "ASIO disabled: ASIO SDK not found (set ASIO_SDK_DIR, see CMakeLists.txt)")
     endif()
 endif()
 
 # Required JUCE modules
-target_link_libraries(NeuralFlowAmp PRIVATE
+target_link_libraries(Tini PRIVATE
     juce::juce_audio_utils
     juce::juce_audio_processors
     juce::juce_dsp 
@@ -166,23 +165,23 @@ target_link_libraries(NeuralFlowAmp PRIVATE
 )
 
 # Special configuration for standalone (executable) version
-juce_generate_juce_header(NeuralFlowAmp)
+juce_generate_juce_header(Tini)
 
-target_compile_definitions(NeuralFlowAmp PUBLIC JUCE_VST3_CAN_REPLACE_VST2=0)
+target_compile_definitions(Tini PUBLIC JUCE_VST3_CAN_REPLACE_VST2=0)
 
-# Headless DSP tests (run: build/NeuralFlowAmpTests_artefacts/Release/NeuralFlowAmp Tests.exe)
-juce_add_console_app(NeuralFlowAmpTests PRODUCT_NAME "NeuralFlowAmp Tests")
+# Headless DSP tests (run: build/TiniTests_artefacts/Release/TiniTests.exe)
+juce_add_console_app(TiniTests PRODUCT_NAME "Tini Tests")
 
-target_sources(NeuralFlowAmpTests PRIVATE Tests/DspTests.cpp Tests/UiSnapshots.cpp)
+target_sources(TiniTests PRIVATE Tests/DspTests.cpp Tests/UiSnapshots.cpp)
 
-target_compile_definitions(NeuralFlowAmpTests PRIVATE
+target_compile_definitions(TiniTests PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_MODAL_LOOPS_PERMITTED=1
 )
 
-target_link_libraries(NeuralFlowAmpTests PRIVATE
-    NeuralFlowAmp
+target_link_libraries(TiniTests PRIVATE
+    Tini
     InterFonts
     $<LINK_LIBRARY:WHOLE_ARCHIVE,nam_core_lib>
     juce::juce_audio_utils
@@ -190,4 +189,4 @@ target_link_libraries(NeuralFlowAmpTests PRIVATE
     juce::juce_dsp
 )
 
-juce_generate_juce_header(NeuralFlowAmpTests)
+juce_generate_juce_header(TiniTests)

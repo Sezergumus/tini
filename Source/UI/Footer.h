@@ -15,7 +15,7 @@ class Footer : public juce::Component
 public:
     static constexpr int height = 60;
 
-    explicit Footer (NeuralFlowAmpAudioProcessor& p)
+    explicit Footer (TiniAudioProcessor& p)
         : processor (p), inMeter ("In"), outMeter ("Out")
     {
         inMeter.attachGain  (processor.apvts, "IN_GAIN");
@@ -110,7 +110,7 @@ private:
         }
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::TextButton tunerButton;
     juce::Rectangle<float> infoArea;
     juce::String audioInfo;

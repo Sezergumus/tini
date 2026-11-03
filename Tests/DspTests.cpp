@@ -17,7 +17,7 @@ namespace
     constexpr double sampleRate = 48000.0;
     constexpr int blockSize = 512;
 
-    void setParam (NeuralFlowAmpAudioProcessor& p, const juce::String& id, float plainValue)
+    void setParam (TiniAudioProcessor& p, const juce::String& id, float plainValue)
     {
         auto* param = p.apvts.getParameter (id);
         param->setValueNotifyingHost (param->convertTo0to1 (plainValue));
@@ -31,12 +31,12 @@ namespace
             proc.setRateAndBufferSizeDetails (sampleRate, blockSize);
             proc.prepareToPlay (sampleRate, blockSize);
         }
-        NeuralFlowAmpAudioProcessor proc;
+        TiniAudioProcessor proc;
     };
 
     /** Runs `numBlocks` blocks. `fill` writes the input for each block (block index, buffer). */
     template <typename Fill>
-    juce::AudioBuffer<float> run (NeuralFlowAmpAudioProcessor& p, int numBlocks, Fill fill)
+    juce::AudioBuffer<float> run (TiniAudioProcessor& p, int numBlocks, Fill fill)
     {
         juce::AudioBuffer<float> all (2, numBlocks * blockSize);
         juce::MidiBuffer midi;
@@ -76,7 +76,7 @@ namespace
     }
 
     /** The built-in cabinet colours the sound; a one-sample unit IR makes the cab stage transparent. */
-    void useFlatCab (NeuralFlowAmpAudioProcessor& p)
+    void useFlatCab (TiniAudioProcessor& p)
     {
         // the built-in cabinet is loaded in the background by the constructor: wait for it first, so
         // that the unit IR is certain to be the last one the engine takes over
@@ -100,7 +100,7 @@ namespace
     }
 
     /** Neutral settings so the signal path is easy to reason about. */
-    void makeTransparent (NeuralFlowAmpAudioProcessor& p)
+    void makeTransparent (TiniAudioProcessor& p)
     {
         setParam (p, "COMP_ON", 0.0f);
         setParam (p, "OD_ON", 0.0f);
@@ -129,7 +129,7 @@ namespace
     }
 
     /** juce::dsp::Convolution starts with a 1-sample unity IR, so "loaded" means size > 1. */
-    bool waitForIr (NeuralFlowAmpAudioProcessor& p)
+    bool waitForIr (TiniAudioProcessor& p)
     {
         for (int i = 0; i < 200 && p.cabSimulator.getCurrentIRSize() <= 1; ++i)
         {
@@ -359,7 +359,7 @@ namespace
         return rms (d, 0, from);
     }
 
-    void addPedal (NeuralFlowAmpAudioProcessor& p, const juce::String& id, bool on = true)
+    void addPedal (TiniAudioProcessor& p, const juce::String& id, bool on = true)
     {
         setParam (p, id + "_ADDED", 1.0f);
         setParam (p, id + "_ON", on ? 1.0f : 0.0f);
@@ -554,7 +554,7 @@ namespace
     }
 
     /** Loads happen on a background thread; the audio thread picks the model up in its next block. */
-    bool waitForNam (NeuralFlowAmpAudioProcessor& p)
+    bool waitForNam (TiniAudioProcessor& p)
     {
         for (int i = 0; i < 500; ++i)
         {
@@ -665,7 +665,7 @@ namespace
 
         // Another host rate: the model is resampled, blocks larger than prepared are fine.
         {
-            NeuralFlowAmpAudioProcessor p;
+            TiniAudioProcessor p;
             p.setRateAndBufferSizeDetails (44100.0, 256);
             p.prepareToPlay (44100.0, 256);
             setParam (p, "AMP_TYPE", 1.0f);
@@ -690,7 +690,7 @@ namespace
 
         // A change of host rate reloads the model for the new rate.
         {
-            NeuralFlowAmpAudioProcessor p;
+            TiniAudioProcessor p;
             p.setRateAndBufferSizeDetails (48000.0, 512);
             p.prepareToPlay (48000.0, 512);
             setParam (p, "AMP_TYPE", 1.0f);
@@ -765,7 +765,7 @@ namespace
 
         // A2 runs at another host rate too.
         {
-            NeuralFlowAmpAudioProcessor p;
+            TiniAudioProcessor p;
             p.setRateAndBufferSizeDetails (44100.0, 512);
             p.prepareToPlay (44100.0, 512);
             setParam (p, "AMP_TYPE", 1.0f);
@@ -1134,7 +1134,7 @@ namespace
 
 
     //==========================================================================
-    bool waitForPedalNam (NeuralFlowAmpAudioProcessor& p, int copy)
+    bool waitForPedalNam (TiniAudioProcessor& p, int copy)
     {
         for (int i = 0; i < 500; ++i)
         {
@@ -1483,7 +1483,7 @@ namespace
     {
         std::printf ("\n-- input / output gain (footer sliders) --\n");
 
-        auto outputPeakFor = [] (NeuralFlowAmpAudioProcessor& p)
+        auto outputPeakFor = [] (TiniAudioProcessor& p)
         {
             auto out = run (p, 12, [] (int, juce::AudioBuffer<float>& buf)
             {

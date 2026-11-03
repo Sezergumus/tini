@@ -12,12 +12,12 @@
 //==============================================================================
 /**
 */
-class NeuralFlowAmpAudioProcessor  : public juce::AudioProcessor
+class TiniAudioProcessor  : public juce::AudioProcessor
 {
 public:
     //==============================================================================
-    NeuralFlowAmpAudioProcessor();
-    ~NeuralFlowAmpAudioProcessor() override;
+    TiniAudioProcessor();
+    ~TiniAudioProcessor() override;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -203,5 +203,5 @@ private:
     std::array<StereoDelay, copies> delayFx;
     std::array<juce::dsp::Reverb, copies> reverb;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeuralFlowAmpAudioProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TiniAudioProcessor)
 };

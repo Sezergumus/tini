@@ -275,7 +275,7 @@ public:
     std::function<void (int)> onPicked;   // index in PresetManager
     std::function<void()> onChanged;      // something was renamed / deleted
 
-    explicit PresetListPanel (NeuralFlowAmpAudioProcessor& p) : processor (p)
+    explicit PresetListPanel (TiniAudioProcessor& p) : processor (p)
     {
         viewport.setViewedComponent (&content, false);
         viewport.setScrollBarsShown (true, false);
@@ -502,7 +502,7 @@ private:
         repaint();
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     juce::Viewport viewport;
     Content content;
     juce::OwnedArray<PresetRow> rows;

@@ -35,7 +35,7 @@ public:
         Row (juce::File f, juce::String p, int n, bool header) : file (std::move (f)), pack (std::move (p)), count (n), isPack (header) {}
     };
 
-    ModelList (NeuralFlowAmpAudioProcessor& p, FileLibrary::Kind libraryKind, juce::String primaryActionLabel)
+    ModelList (TiniAudioProcessor& p, FileLibrary::Kind libraryKind, juce::String primaryActionLabel)
         : processor (p), kind (libraryKind), primaryLabel (std::move (primaryActionLabel))
     {
         list.setModel (this);
@@ -1208,7 +1208,7 @@ private:
             askDelete (rows[(size_t) row].file);
     }
 
-    NeuralFlowAmpAudioProcessor& processor;
+    TiniAudioProcessor& processor;
     FileLibrary::Kind kind;
     juce::String primaryLabel, emptyText = "Nothing here yet.\nDrop files onto this list, or copy them into the folder.", search;
     juce::ListBox list;

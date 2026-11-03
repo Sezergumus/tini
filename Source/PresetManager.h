@@ -8,7 +8,7 @@
     the user's application-data folder.
 
     This class only knows about data and files. The processor applies a preset to itself
-    (it owns the chain order and the IR), see NeuralFlowAmpAudioProcessor::loadPreset.
+    (it owns the chain order and the IR), see TiniAudioProcessor::loadPreset.
     Use it from the message thread only. */
 class PresetManager
 {
@@ -38,7 +38,7 @@ public:
     static juce::File defaultUserFolder()
     {
         return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                   .getChildFile ("NeuralFlowAmp").getChildFile ("Presets");
+                   .getChildFile ("Tini").getChildFile ("Presets");
     }
 
     /** Points the manager at another folder (used by tests) and reads it. */
