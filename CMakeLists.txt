@@ -45,6 +45,16 @@ if(MSVC)
     target_compile_options(nam_core_lib PRIVATE /W0 /bigobj "$<$<CONFIG:Release>:/O2>")
 endif()
 
+# Inter (SIL Open Font License, see third_party/fonts/Inter/OFL.txt), embedded in the binary so the UI
+# looks the same on every machine. Regular and SemiBold are the only weights the UI uses.
+juce_add_binary_data(InterFonts
+    HEADER_NAME InterFontData.h
+    NAMESPACE InterFontData
+    SOURCES
+        third_party/fonts/Inter/Inter-Regular.ttf
+        third_party/fonts/Inter/Inter-SemiBold.ttf)
+set_target_properties(InterFonts PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # Define the project as both VST3 plugin and standalone application
 juce_add_plugin(NeuralFlowAmp
     COMPANY_NAME "YourName"
@@ -126,6 +136,7 @@ target_link_libraries(NeuralFlowAmp PRIVATE
     juce::juce_audio_processors
     juce::juce_dsp 
     juce::juce_gui_extra
+    InterFonts
     $<LINK_LIBRARY:WHOLE_ARCHIVE,nam_core_lib>
 )
 
@@ -147,6 +158,7 @@ target_compile_definitions(NeuralFlowAmpTests PRIVATE
 
 target_link_libraries(NeuralFlowAmpTests PRIVATE
     NeuralFlowAmp
+    InterFonts
     $<LINK_LIBRARY:WHOLE_ARCHIVE,nam_core_lib>
     juce::juce_audio_utils
     juce::juce_audio_processors

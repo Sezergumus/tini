@@ -3,36 +3,39 @@
 #include "Theme.h"
 
 //==============================================================================
-/** Small read-out box below a knob. Double-click to type a value. */
-class ValueBox : public juce::Label
+/** The line under a knob. Shows the knob's name, and its value while the knob is hovered or
+    dragged. A click turns it into a text box so a value can be typed. */
+class KnobCaption : public juce::Label
 {
 public:
-    ValueBox()
+    KnobCaption()
     {
-        setEditable (false, true, false);
+        setEditable (true, false, false);
         setJustificationType (juce::Justification::centred);
-        setFont (Theme::mono (12.0f));
+        setFont (Theme::ui (12.0f));
         setMouseCursor (juce::MouseCursor::IBeamCursor);
     }
 
     void paint (juce::Graphics& g) override
     {
-        Theme::drawInset (g, getLocalBounds().toFloat(), 4.0f);
+        if (isBeingEdited())
+            return;
 
-        if (! isBeingEdited())
-        {
-            g.setColour (findColour (juce::Label::textColourId));
-            g.setFont (Theme::mono (12.0f));
-            g.drawText (getText(), getLocalBounds(), juce::Justification::centred, false);
-        }
+        g.setColour (findColour (juce::Label::textColourId));
+        g.setFont (getFont());
+        g.drawText (getText(), getLocalBounds(), juce::Justification::centred, false);
     }
 };
 
 //==============================================================================
-/** Rotary knob + caption + editable value read-out, bound to a parameter. */
+/** Flat rotary knob bound to a parameter. The caption below shows the name; while the knob is
+    hovered or dragged it shows the value instead. Double-click resets to the default (done by the
+    parameter attachment), a click on the caption lets you type a value. */
 class LabeledKnob : public juce::Component
 {
 public:
+    /** `colour` is the colour of the value arc: the page gives its own (cyan for amp and cab, the
+        category colour for a pedal). */
     LabeledKnob (const juce::String& displayName, juce::Colour colour,
                  int decimals = 1, const juce::String& suffix = {})
         : name (displayName), unit (suffix), decimalPlaces (decimals), tint (colour)
@@ -42,64 +45,84 @@ public:
         slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.2f,
                                     juce::MathConstants<float>::pi * 2.8f, true);
         slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
-        slider.onValueChange = [this] { updateValueText(); };
+        slider.onValueChange = [this] { updateCaption(); };
         addAndMakeVisible (slider);
 
-        valueBox.setColour (juce::Label::textColourId, colour);
-        valueBox.onTextChange = [this]
+        caption.onTextChange = [this]
         {
-            const auto text = valueBox.getText();
+            const auto text = caption.getText();
             if (text.containsAnyOf ("0123456789"))
-                slider.setValue (text.getDoubleValue(), juce::sendNotificationSync);
-            updateValueText();
+                slider.setValue (parse ? parse (text) : text.getDoubleValue(), juce::sendNotificationSync);
+            updateCaption();
         };
-        addAndMakeVisible (valueBox);
+        caption.onEditorHide = [this] { updateCaption(); };
+        addAndMakeVisible (caption);
+
+        addMouseListener (this, true);   // hover over the slider or the caption
+        updateCaption();
     }
 
     void attach (juce::AudioProcessorValueTreeState& apvts, const juce::String& paramID)
     {
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, paramID, slider);
-        updateValueText();
+        updateCaption();
     }
 
-    void paint (juce::Graphics& g) override
+    /** Custom text for the value (e.g. "12.5 kHz") and how typed text is read back. */
+    void setValueFormat (std::function<juce::String (double)> formatter, std::function<double (const juce::String&)> parser)
     {
-        g.setColour (Theme::textMid);
-        g.setFont (Theme::ui (11.0f, true, 0.12f));
-        g.drawText (name, nameArea, juce::Justification::centred, false);
+        format = std::move (formatter);
+        parse = std::move (parser);
+        updateCaption();
     }
 
     void resized() override
     {
         auto b = getLocalBounds();
-
-        const int valueH = 20, nameH = 16;
-        auto valueArea = b.removeFromBottom (valueH);
-        nameArea       = b.removeFromBottom (nameH);
-        b.removeFromBottom (2);
+        caption.setBounds (b.removeFromBottom (captionHeight));
+        b.removeFromBottom (4);
 
         const int d = juce::jmin (b.getWidth(), b.getHeight(), maxDiameter);
         slider.setBounds (b.withSizeKeepingCentre (d, d));
-        valueBox.setBounds (valueArea.withSizeKeepingCentre (juce::jmin (getWidth(), 64), valueH));
     }
 
     /** Caps the knob size so the arc has room to breathe inside its cell. */
     void setMaxDiameter (int d) { maxDiameter = d; resized(); }
 
+    /** The text under the knob right now (name or value). */
+    juce::String getCaptionText() const { return caption.getText(); }
+    juce::String getValueText() const
+    {
+        return format ? format (slider.getValue()) : juce::String (slider.getValue(), decimalPlaces) + unit;
+    }
+
+    void mouseEnter (const juce::MouseEvent&) override { updateCaption(); }
+    void mouseExit  (const juce::MouseEvent&) override { updateCaption(); }
+    void mouseDown  (const juce::MouseEvent&) override { updateCaption(); }
+    void mouseUp    (const juce::MouseEvent&) override { updateCaption(); }
+
     juce::Slider slider;
 
 private:
-    void updateValueText()
+    static constexpr int captionHeight = 20;
+
+    void updateCaption()
     {
-        valueBox.setText (juce::String (slider.getValue(), decimalPlaces) + unit, juce::dontSendNotification);
+        if (caption.isBeingEdited())
+            return;
+
+        const bool showValue = isMouseOverOrDragging (true) || slider.isMouseButtonDown();
+        caption.setColour (juce::Label::textColourId, showValue ? Theme::textHi : Theme::textMid);
+        caption.setText (showValue ? getValueText() : name, juce::dontSendNotification);
     }
 
     juce::String name, unit;
     int decimalPlaces;
-    int maxDiameter = 80;
+    int maxDiameter = 96;
     juce::Colour tint;
-    juce::Rectangle<int> nameArea;
-    ValueBox valueBox;
+    std::function<juce::String (double)> format;
+    std::function<double (const juce::String&)> parse;
+    KnobCaption caption;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 };
 

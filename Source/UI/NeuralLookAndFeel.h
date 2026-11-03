@@ -2,60 +2,67 @@
 
 #include "Theme.h"
 
+/** Flat, quiet controls: thin tracks, no gradients, no drop shadows. The colour of a knob arc, a
+    slider or a toggled button is whatever the control was given (rotarySliderFillColourId), so a
+    page can tint all of its controls with its own colour. */
 class NeuralLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     NeuralLookAndFeel()
     {
+        setDefaultSansSerifTypeface (Theme::interTypeface (false));
+
         setColour (juce::Slider::rotarySliderFillColourId, Theme::accent);
         setColour (juce::Slider::thumbColourId,            Theme::textHi);
         setColour (juce::Label::textColourId,              Theme::textHi);
+        setColour (juce::TextButton::textColourOnId,       Theme::accent);   // a switched-on toggle button
         setColour (juce::TextEditor::backgroundColourId,   Theme::inset);
         setColour (juce::TextEditor::textColourId,         Theme::textHi);
         setColour (juce::TextEditor::highlightColourId,    Theme::accent.withAlpha (0.35f));
-        setColour (juce::TextEditor::outlineColourId,      Theme::accent.withAlpha (0.6f));
+        setColour (juce::TextEditor::outlineColourId,      Theme::panelBorder);
         setColour (juce::TextEditor::focusedOutlineColourId, Theme::accent);
         setColour (juce::CaretComponent::caretColourId,    Theme::accent);
 
-        setColour (juce::PopupMenu::backgroundColourId,            Theme::panelTop);
+        setColour (juce::PopupMenu::backgroundColourId,            Theme::surface);
         setColour (juce::PopupMenu::textColourId,                  Theme::textHi);
         setColour (juce::PopupMenu::headerTextColourId,            Theme::textLo);
         setColour (juce::PopupMenu::highlightedBackgroundColourId, Theme::accent.withAlpha (0.20f));
         setColour (juce::PopupMenu::highlightedTextColourId,       Theme::textHi);
+
+        setColour (juce::TooltipWindow::backgroundColourId, Theme::surfaceHi);
+        setColour (juce::TooltipWindow::textColourId,       Theme::textHi);
+        setColour (juce::TooltipWindow::outlineColourId,    Theme::panelBorder);
     }
 
     //==========================================================================
-    // Call-out bubbles (the add-pedal popover): graphite card, thin border, soft shadow, arrow.
+    // Call-out bubbles (the add-pedal popover): flat card, thin border, soft shadow, arrow.
     void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g, const juce::Path& path, juce::Image&) override
     {
-        juce::DropShadow (juce::Colours::black.withAlpha (0.55f), 20, { 0, 6 }).drawForPath (g, path);
+        juce::DropShadow (juce::Colours::black.withAlpha (0.5f), 20, { 0, 6 }).drawForPath (g, path);
 
-        const auto bounds = path.getBounds();
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff20252b), 0.0f, bounds.getY(),
-                                                 juce::Colour (0xff15181c), 0.0f, bounds.getBottom(), false));
+        g.setColour (Theme::surfaceHi);
         g.fillPath (path);
 
-        g.setColour (juce::Colour (0xff3a424b));
+        g.setColour (Theme::panelBorder.brighter (0.2f));
         g.strokePath (path, juce::PathStrokeType (1.0f));
     }
 
     int getCallOutBoxBorderSize (const juce::CallOutBox&) override { return 16; }
 
     //==========================================================================
-    void drawScrollbar(juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height,
+    void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height,
                         bool isVertical, int thumbStart, int thumbSize, bool over, bool down) override
     {
-        auto track = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height);
-        g.setColour (juce::Colours::white.withAlpha (0.04f));
-        g.fillRoundedRectangle (track.reduced (isVertical ? 2.0f : 0.0f, isVertical ? 0.0f : 2.0f), 3.0f);
-
         auto thumb = isVertical ? juce::Rectangle<float> ((float) x, (float) thumbStart, (float) width, (float) thumbSize)
                                 : juce::Rectangle<float> ((float) thumbStart, (float) y, (float) thumbSize, (float) height);
-        g.setColour (over || down ? Theme::accent.withAlpha (0.75f) : juce::Colours::white.withAlpha (0.20f));
-        g.fillRoundedRectangle (thumb.reduced (isVertical ? 2.0f : 0.0f, isVertical ? 0.0f : 2.0f), 3.0f);
+        thumb = thumb.reduced (isVertical ? 2.0f : 0.0f, isVertical ? 0.0f : 2.0f);
+
+        g.setColour (juce::Colours::white.withAlpha (over || down ? 0.28f : 0.14f));
+        g.fillRoundedRectangle (thumb, thumb.getHeight() > thumb.getWidth() ? thumb.getWidth() * 0.5f : thumb.getHeight() * 0.5f);
     }
 
     //==========================================================================
+    /** Flat knob: a thin track, a value arc in the knob's colour, a quiet disc and a line pointer. */
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float pos,
                            float startAngle, float endAngle, juce::Slider& slider) override
     {
@@ -64,9 +71,9 @@ public:
         auto c        = bounds.getCentre();
 
         const float outerR  = diameter * 0.5f;
-        const float trackW  = juce::jmax (2.5f, diameter * 0.055f);
+        const float trackW  = juce::jmax (2.0f, diameter * 0.04f);
         const float arcR    = outerR - trackW * 0.5f;
-        const float bodyR   = outerR - trackW * 2.6f;
+        const float bodyR   = outerR - trackW * 3.2f;
         const float angle   = startAngle + pos * (endAngle - startAngle);
         const auto  colour  = slider.findColour (juce::Slider::rotarySliderFillColourId);
         const bool  hot     = slider.isEnabled() && slider.isMouseOverOrDragging();
@@ -81,39 +88,26 @@ public:
         {
             juce::Path value;
             value.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, angle, true);
-
-            g.setColour (colour.withAlpha (hot ? 0.30f : 0.17f));
-            g.strokePath (value, juce::PathStrokeType (trackW * 2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour (colour);
+            g.setColour (hot ? colour.brighter (0.15f) : colour);
             g.strokePath (value, juce::PathStrokeType (trackW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
 
         // --- knob body -----------------------------------------------------------
-        g.setColour (juce::Colours::black.withAlpha (0.55f));
-        g.fillEllipse (c.x - bodyR, c.y - bodyR + 2.5f, bodyR * 2.0f, bodyR * 2.0f);
-
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4a515a), c.x - bodyR * 0.5f, c.y - bodyR * 0.9f,
-                                                 juce::Colour (0xff14171b), c.x + bodyR * 0.4f, c.y + bodyR, false));
+        g.setColour (hot ? Theme::surfaceHi.brighter (0.1f) : Theme::surfaceHi);
         g.fillEllipse (c.x - bodyR, c.y - bodyR, bodyR * 2.0f, bodyR * 2.0f);
-
-        const float faceR = bodyR * 0.84f;
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff30353c), c.x, c.y - faceR * 0.5f,
-                                                 juce::Colour (0xff1a1d22), c.x + faceR, c.y, true));
-        g.fillEllipse (c.x - faceR, c.y - faceR, faceR * 2.0f, faceR * 2.0f);
-
-        g.setColour (juce::Colours::white.withAlpha (0.07f));
-        g.drawEllipse (c.x - faceR, c.y - faceR, faceR * 2.0f, faceR * 2.0f, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.06f));
+        g.drawEllipse (c.x - bodyR + 0.5f, c.y - bodyR + 0.5f, bodyR * 2.0f - 1.0f, bodyR * 2.0f - 1.0f, 1.0f);
 
         // --- pointer -------------------------------------------------------------
-        juce::Path pointer;
-        pointer.addRoundedRectangle (-1.5f, -faceR + faceR * 0.13f, 3.0f, faceR * 0.38f, 1.5f);
-        pointer.applyTransform (juce::AffineTransform::rotation (angle).translated (c.x, c.y));
-        g.setColour (hot ? colour.brighter (0.5f) : juce::Colours::white.withAlpha (0.92f));
-        g.fillPath (pointer);
+        const float inner = bodyR * 0.38f, outer = bodyR * 0.82f;
+        const float dx = std::sin (angle), dy = -std::cos (angle);
+        g.setColour (Theme::textHi);
+        g.drawLine (c.x + dx * inner, c.y + dy * inner, c.x + dx * outer, c.y + dy * outer,
+                    juce::jmax (2.0f, bodyR * 0.07f));
     }
 
     //==========================================================================
-    int getSliderThumbRadius (juce::Slider&) override { return 7; }
+    int getSliderThumbRadius (juce::Slider&) override { return 6; }
 
     void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
                            float, float, juce::Slider::SliderStyle, juce::Slider& slider) override
@@ -122,65 +116,65 @@ public:
         const auto  colour = slider.findColour (juce::Slider::rotarySliderFillColourId);
         const bool  hot    = slider.isEnabled() && slider.isMouseOverOrDragging();
 
-        juce::Rectangle<float> track ((float) x, cy - 1.5f, (float) width, 3.0f);
+        juce::Rectangle<float> track ((float) x, cy - 1.0f, (float) width, 2.0f);
         g.setColour (Theme::trackBg);
-        g.fillRoundedRectangle (track, 1.5f);
-
-        g.setColour (colour.withAlpha (0.20f));
-        g.fillRoundedRectangle (track.withRight (sliderPos).expanded (0.0f, 2.0f), 3.5f);
+        g.fillRoundedRectangle (track, 1.0f);
         g.setColour (colour);
-        g.fillRoundedRectangle (track.withRight (sliderPos), 1.5f);
+        g.fillRoundedRectangle (track.withRight (sliderPos), 1.0f);
 
-        const float r = hot ? 7.0f : 6.0f;
-        g.setColour (juce::Colours::black.withAlpha (0.5f));
-        g.fillEllipse (sliderPos - r, cy - r + 1.5f, r * 2.0f, r * 2.0f);
-
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f5f8), sliderPos, cy - r,
-                                                 juce::Colour (0xff9aa3ad), sliderPos, cy + r, false));
+        const float r = hot ? 6.0f : 5.0f;
+        g.setColour (Theme::textHi);
         g.fillEllipse (sliderPos - r, cy - r, r * 2.0f, r * 2.0f);
-
-        if (hot)
-        {
-            g.setColour (colour.withAlpha (0.8f));
-            g.drawEllipse (sliderPos - r, cy - r, r * 2.0f, r * 2.0f, 1.5f);
-        }
     }
 
     //==========================================================================
-    juce::Font getTextButtonFont (juce::TextButton&, int) override { return Theme::ui (11.0f, true, 0.1f); }
+    juce::Font getTextButtonFont (juce::TextButton&, int) override { return Theme::ui (12.0f, true); }
 
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour&,
                                bool highlighted, bool down) override
     {
-        auto r = button.getLocalBounds().toFloat().reduced (0.5f);
+        auto r = button.getLocalBounds().toFloat();
+        const bool on = button.getToggleState();
+        const bool segment = (bool) button.getProperties().getWithDefault ("segment", false);
 
         if (! button.isEnabled())
         {
-            g.setColour (juce::Colours::white.withAlpha (0.02f));
-            g.fillRoundedRectangle (r, 5.0f);
-            g.setColour (juce::Colour (0xff262b32));
-            g.drawRoundedRectangle (r, 5.0f, 1.0f);
+            if (! segment)
+            {
+                g.setColour (juce::Colours::white.withAlpha (0.03f));
+                g.fillRoundedRectangle (r, 6.0f);
+            }
             return;
         }
 
-        // a button that is switched on (toggle / segmented control) keeps an accent tint
-        const bool on = button.getToggleState();
+        if (segment)
+        {
+            // buttons of a segmented switch sit on a shared track; the selected one is a lighter pill
+            if (on || highlighted)
+            {
+                g.setColour (juce::Colours::white.withAlpha (on ? (down ? 0.16f : 0.12f) : 0.06f));
+                g.fillRoundedRectangle (r.reduced (2.0f), 5.0f);
+            }
+            return;
+        }
 
-        g.setColour (down ? Theme::accent.withAlpha (0.25f)
-                          : highlighted ? Theme::accent.withAlpha (on ? 0.26f : 0.14f)
-                                        : on ? Theme::accent.withAlpha (0.18f)
-                                             : juce::Colours::white.withAlpha (0.05f));
-        g.fillRoundedRectangle (r, 5.0f);
-
-        g.setColour (highlighted || down || on ? Theme::accent.withAlpha (on ? 0.9f : 0.85f) : juce::Colour (0xff343b43));
-        g.drawRoundedRectangle (r, 5.0f, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (down ? 0.14f : highlighted ? 0.10f : 0.06f));
+        g.fillRoundedRectangle (r, 6.0f);
     }
 
     void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool highlighted, bool) override
     {
+        const bool segment = (bool) button.getProperties().getWithDefault ("segment", false);
+        const bool on = button.getToggleState();
+
         g.setFont (getTextButtonFont (button, button.getHeight()));
-        g.setColour (! button.isEnabled() ? Theme::textLo
-                     : highlighted || button.getToggleState() ? Theme::accent.brighter (0.3f) : Theme::textHi);
+
+        juce::Colour colour = Theme::textHi;
+        if (! button.isEnabled())              colour = Theme::textLo;
+        else if (segment)                      colour = on ? Theme::textHi : (highlighted ? Theme::textHi : Theme::textMid);
+        else if (on)                           colour = button.findColour (juce::TextButton::textColourOnId);
+
+        g.setColour (colour);
         g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
     }
 };
