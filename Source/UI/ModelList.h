@@ -1078,18 +1078,18 @@ private:
         const float indent = line.pack.isEmpty() ? 0.0f : 16.0f;   // the files of a pack sit under their header
         r.removeFromLeft (indent);
 
-        if (fresh.count (file.getFullPathName()) > 0)
-        {
-            g.setColour (Theme::accent.withAlpha (0.14f));
-            g.fillRoundedRectangle (r, 6.0f);
-            g.setColour (Theme::accent);
-            g.fillRoundedRectangle (r.withWidth (3.0f).reduced (0.0f, 6.0f), 1.5f);
-        }
-
         if (rowSelected)
         {
             g.setColour (Theme::surfaceHi);
             g.fillRoundedRectangle (r, 6.0f);
+        }
+
+        if (fresh.count (file.getFullPathName()) > 0)
+        {
+            g.setColour (Theme::accent.withAlpha (rowSelected ? 0.22f : 0.14f));
+            g.fillRoundedRectangle (r, 6.0f);
+            g.setColour (Theme::accent);
+            g.fillRoundedRectangle (r.withWidth (3.0f).reduced (0.0f, 6.0f), 1.5f);
         }
 
         auto text = r.reduced (12.0f, 5.0f);

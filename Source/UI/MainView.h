@@ -145,8 +145,11 @@ public:
         chain.setBounds (chainArea);
 
         auto blockArea = b.reduced (margin, 0).withTrimmedBottom (8).withTrimmedTop (4);
-        if (blocks.getOverlayKind() == BlockEditor::Overlay::settings)
-            blockArea.setTop (chainArea.getY());   // the page also takes the chain strip's place
+        // Settings, and the tuner opened from the Library, also take the chain strip's place (there is no strip then)
+        const auto overlay = blocks.getOverlayKind();
+        if (overlay == BlockEditor::Overlay::settings
+            || (page == Page::library && overlay != BlockEditor::Overlay::none && overlay != BlockEditor::Overlay::addPedal))
+            blockArea.setTop (chainArea.getY());
         blocks.setBounds (blockArea);
 
         // the Library takes the place of the chain strip and the block page
