@@ -57,14 +57,17 @@ set_target_properties(InterFonts PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Define the project as both VST3 plugin and standalone application
 juce_add_plugin(NeuralFlowAmp
-    COMPANY_NAME "YourName"
+    COMPANY_NAME "Sezer Gumus"
     # PRODUCT_NAME is the file name (Tini.exe, Tini.vst3) and also the name shown by the DAW and
     # in the window title. It has to stay plain ASCII: JUCE passes it to the compiler as a macro
     # on the command line, where a non-ASCII letter such as the dotless i is not read as UTF-8 and
     # the window title then crashes the app when it is drawn. The UI itself writes "tını".
     # The CMake target stays NeuralFlowAmp so existing build paths keep working.
     PRODUCT_NAME "Tini"
-    BUNDLE_ID "com.yourname.tini"
+    BUNDLE_ID "io.github.sezergumus.tini"
+    # The IDs a DAW stores in saved projects to find the plugin again: never change them after release.
+    PLUGIN_MANUFACTURER_CODE Szgm
+    PLUGIN_CODE Tini
     ICON_BIG   "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Branding/icon-512.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Branding/icon-64.png"
     IS_SYNTH FALSE
