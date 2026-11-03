@@ -6,7 +6,8 @@
 
 //==============================================================================
 /** The Settings page (the gear in the header): audio device in the standalone, the tuner's reference
-    pitch, and the version. It takes the place of the block page until a block is clicked. */
+    pitch, and the version. It fills the whole area between the header and the footer (the chain strip
+    is hidden meanwhile) until Done or the gear closes it. */
 class SettingsPage : public juce::Component
 {
 public:
@@ -36,7 +37,17 @@ public:
         referenceSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         referenceSlider.onValueChange = [this] { processor.setTunerReferenceHz ((float) referenceSlider.getValue()); };
         addAndMakeVisible (referenceSlider);
+
+        // the page covers the chain strip, so it brings its own way back
+        doneButton.setButtonText ("Done");
+        doneButton.onClick = [this] { if (onClose) onClose(); };
+        addAndMakeVisible (doneButton);
     }
+
+    /** Called when the Done button was pressed; MainView closes the page. */
+    std::function<void()> onClose;
+
+    juce::TextButton& getDoneButton() { return doneButton; }
 
     bool hasAudioSelector() const { return audioSelector != nullptr; }
     juce::Slider& getReferenceSlider() { return referenceSlider; }
@@ -83,6 +94,7 @@ public:
     {
         auto b = getLocalBounds();
         titleArea = b.removeFromTop (36);
+        doneButton.setBounds (titleArea.removeFromRight (84).withSizeKeepingCentre (84, 32));
         b.removeFromTop (8);
 
         auto left = b.removeFromLeft (b.getWidth() * 60 / 100);
@@ -118,6 +130,7 @@ private:
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSelector;
     juce::Viewport audioViewport;
     juce::Slider referenceSlider;
+    juce::TextButton doneButton;
 
     juce::Rectangle<int> titleArea, audioHeading, audioNote, tunerHeading, referenceLabel, aboutHeading;
     std::array<juce::Rectangle<int>, 3> aboutLines;

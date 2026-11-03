@@ -192,12 +192,40 @@ private:
 };
 
 //==============================================================================
-/** Slim horizontal peak meter: a label on the left, a thin bar, small dB marks under it. One colour,
-    a small peak-hold tick, red only while it clips. */
+/** Slim horizontal peak meter with a gain slider: a label on the left; on top a thin gain line with a
+    thumb (drag, wheel, double click = 0 dB) and the value on its right; under it the level bar with
+    small dB marks. One colour, a peak-hold tick, red only while the level clips.
+
+    The level bar always shows the signal at its own point (after the input gain, after the output
+    gain), so it also works as the visualiser for the gain you set. */
 class LevelMeter : public juce::Component
 {
 public:
     explicit LevelMeter (const juce::String& caption) : title (caption) {}
+
+    /** Makes the gain line work: it edits `parameterID` (a dB value) of `apvts`, host-automatable. */
+    void attachGain (juce::AudioProcessorValueTreeState& apvts, const juce::String& parameterID)
+    {
+        gainParam = apvts.getParameter (parameterID);
+        gainRange = apvts.getParameterRange (parameterID);
+        syncGain();
+        repaint();
+    }
+
+    /** Current gain in dB (0 when no gain is attached). */
+    float getGainDb() const { return gainDb; }
+
+    /** Sets the gain in dB (clamped to the parameter's range) and tells the host. */
+    void setGainDb (float db)
+    {
+        if (gainParam == nullptr)
+            return;
+
+        db = gainRange.snapToLegalValue (gainRange.getRange().clipValue (db));
+        gainParam->setValueNotifyingHost (gainParam->convertTo0to1 (db));
+        syncGain();
+        repaint();
+    }
 
     /** Feed the newest block peak (dBFS). Call at the UI refresh rate. */
     void pushLevel (float db)
@@ -210,6 +238,7 @@ public:
         else if (holdFrames > 0) --holdFrames;
         else peak = juce::jmax (floorDb, peak - 0.6f);
 
+        syncGain();   // follows host automation and presets
         repaint();
     }
 
@@ -218,14 +247,14 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds().toFloat();
+        const auto area = contentArea();
 
-        auto label = r.removeFromLeft (labelWidth);
         g.setColour (Theme::textLo);
         g.setFont (Theme::ui (11.0f));
-        g.drawText (title, label.withHeight (barHeight + 8.0f), juce::Justification::centredLeft, false);
+        g.drawText (title, area.withWidth (labelWidth).withHeight (area.getHeight() - marksHeight),
+                    juce::Justification::centredLeft, false);
 
-        auto bar = r.withTrimmedRight (14.0f).withHeight (barHeight).withY (r.getY() + 4.0f);   // room for the "0" mark
+        const auto bar = barArea();
         g.setColour (Theme::trackBg);
         g.fillRoundedRectangle (bar, barHeight * 0.5f);
 
@@ -252,13 +281,146 @@ public:
             g.drawText (juce::String (mark), juce::Rectangle<float> (x - 14.0f, bar.getBottom() + 4.0f, 28.0f, 12.0f),
                         juce::Justification::centred, false);
         }
+
+        if (gainParam != nullptr)
+            paintGain (g);
     }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (gainParam == nullptr || ! gainHitArea().contains (e.position))
+            return;
+
+        dragging = true;
+        gainParam->beginChangeGesture();
+        setGainFromX (e.position.x);
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragging)
+            setGainFromX (e.position.x);
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragging)
+        {
+            dragging = false;
+            gainParam->endChangeGesture();
+        }
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (gainParam != nullptr && gainHitArea().contains (e.position))
+            setGainDb (0.0f);
+    }
+
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        if (gainParam == nullptr || wheel.deltaY == 0.0f)
+            return;
+
+        gainParam->beginChangeGesture();
+        setGainDb (gainDb + (wheel.deltaY > 0.0f ? 0.5f : -0.5f));
+        gainParam->endChangeGesture();
+    }
+
+    /** The gain line's bounds (empty without a gain), so tests can drag it. */
+    juce::Rectangle<float> getGainLineBounds() const { return gainParam != nullptr ? gainRowArea() : juce::Rectangle<float>(); }
 
 private:
     static constexpr float floorDb = -60.0f;
     static constexpr float labelWidth = 28.0f;
     static constexpr float barHeight = 6.0f;
+    static constexpr float rowHeight = 14.0f;       // the gain line row (only when a gain is attached)
+    static constexpr float barRowHeight = 12.0f;    // the level bar row
+    static constexpr float marksHeight = 16.0f;     // dB marks under the bar
+    static constexpr float valueWidth = 56.0f;      // gain text on the right of the gain line
+
+    /** The unit (gain line + bar + marks) is centred as a whole in the component, so the footer can put
+        everything else on the same centre line. */
+    juce::Rectangle<float> contentArea() const
+    {
+        const float h = (gainParam != nullptr ? rowHeight : 0.0f) + barRowHeight + marksHeight;
+        return getLocalBounds().toFloat().withSizeKeepingCentre ((float) getWidth(), h);
+    }
+
+    juce::Rectangle<float> gainRowArea() const
+    {
+        auto r = contentArea();
+        r.removeFromLeft (labelWidth);
+        return r.removeFromTop (rowHeight).withTrimmedRight (valueWidth);
+    }
+
+    juce::Rectangle<float> barArea() const
+    {
+        auto r = contentArea();
+        r.removeFromLeft (labelWidth);
+        if (gainParam != nullptr)
+            r.removeFromTop (rowHeight);
+        auto row = r.removeFromTop (barRowHeight).withTrimmedRight (valueWidth);
+        return row.withSizeKeepingCentre (row.getWidth(), barHeight);
+    }
+
+    juce::Rectangle<float> gainHitArea() const { return gainRowArea().expanded (6.0f, 4.0f); }
+
+    float gainToX (float db) const
+    {
+        const auto row = gainRowArea();
+        return row.getX() + row.getWidth() * gainRange.convertTo0to1 (db);
+    }
+
+    void setGainFromX (float x)
+    {
+        const auto row = gainRowArea();
+        const float unit = juce::jlimit (0.0f, 1.0f, (x - row.getX()) / row.getWidth());
+        setGainDb (gainRange.convertFrom0to1 (unit));
+    }
+
+    void syncGain()
+    {
+        if (gainParam != nullptr)
+            gainDb = gainRange.convertFrom0to1 (gainParam->getValue());
+    }
+
+    void paintGain (juce::Graphics& g) const
+    {
+        const auto row = gainRowArea();
+        const float y = row.getCentreY();
+        const float zeroX = gainToX (0.0f), thumbX = gainToX (gainDb);
+        const bool changed = std::abs (gainDb) > 0.05f;
+
+        g.setColour (Theme::trackBg);
+        g.fillRoundedRectangle (row.getX(), y - 1.5f, row.getWidth(), 3.0f, 1.5f);
+
+        // the filled part runs from 0 dB to the thumb, so it reads as a boost or a cut
+        if (changed)
+        {
+            g.setColour (Theme::accent.withAlpha (0.55f));
+            g.fillRect (juce::jmin (zeroX, thumbX), y - 1.5f, std::abs (thumbX - zeroX), 3.0f);
+        }
+
+        g.setColour (Theme::textLo);
+        g.fillRect (zeroX - 0.5f, y - 4.5f, 1.0f, 9.0f);   // 0 dB notch
+
+        g.setColour (changed ? Theme::accent : Theme::textMid);
+        g.fillEllipse (thumbX - 4.5f, y - 4.5f, 9.0f, 9.0f);
+
+        g.setColour (changed ? Theme::textHi : Theme::textLo);
+        g.setFont (Theme::ui (11.0f));
+        const auto text = juce::String (gainDb > 0.05f ? "+" : "") + juce::String (gainDb, 1) + " dB";
+        g.drawText (text, juce::Rectangle<float> (row.getRight() + 10.0f, row.getY(), valueWidth - 10.0f, row.getHeight()),
+                    juce::Justification::centredLeft, false);
+    }
+
     juce::String title;
     float shown = floorDb, peak = floorDb;
     int holdFrames = 0;
+
+    juce::RangedAudioParameter* gainParam = nullptr;
+    juce::NormalisableRange<float> gainRange;
+    float gainDb = 0.0f;
+    bool dragging = false;
 };

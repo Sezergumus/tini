@@ -7,15 +7,18 @@
 
 //==============================================================================
 /** The bottom strip of the Rig: the input meter on the left, the output meter on the right, and in
-    the middle the Tuner button with the audio device in plain text. */
+    the middle the Tuner button with the audio device in plain text. Each meter also carries a gain
+    line (input / output level in dB). Everything is centred on the strip's middle line. */
 class Footer : public juce::Component
 {
 public:
-    static constexpr int height = 52;
+    static constexpr int height = 60;
 
     explicit Footer (NeuralFlowAmpAudioProcessor& p)
         : processor (p), inMeter ("In"), outMeter ("Out")
     {
+        inMeter.attachGain  (processor.apvts, "IN_GAIN");
+        outMeter.attachGain (processor.apvts, "OUT_GAIN");
         addAndMakeVisible (inMeter);
         addAndMakeVisible (outMeter);
 
@@ -53,7 +56,7 @@ public:
 
     void resized() override
     {
-        auto b = getLocalBounds().reduced (0, 6);
+        auto b = getLocalBounds();
 
         inMeter.setBounds (b.removeFromLeft (meterWidth));
         outMeter.setBounds (b.removeFromRight (meterWidth));

@@ -28,6 +28,8 @@ NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
     namInParam   = apvts.getRawParameterValue("NAM_IN");
     namOutParam  = apvts.getRawParameterValue("NAM_OUT");
     namNormParam = apvts.getRawParameterValue("NAM_NORM");
+    inGainParam  = apvts.getRawParameterValue("IN_GAIN");
+    outGainParam = apvts.getRawParameterValue("OUT_GAIN");
 
     for (int item = 0; item < PedalCatalog::ampItem; ++item)
     {
@@ -204,6 +206,15 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+    // Input gain comes first, so the input meter and the tuner see what really reaches the chain.
+    // The gain is ramped over the block to avoid zipper noise while the slider moves.
+    {
+        const float target = juce::Decibels::decibelsToGain(inGainParam->load());
+        if (target != lastInGain || target != 1.0f)
+            buffer.applyGainRamp(0, buffer.getNumSamples(), lastInGain, target);
+        lastInGain = target;
+    }
+
 	storePeakMax(inputPeak, buffer.getMagnitude(0, buffer.getNumSamples()));
 
     const bool tunerOn = tunerActive.load(std::memory_order_relaxed);
@@ -232,6 +243,13 @@ void NeuralFlowAmpAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 	auto currentMaster = apvts.getRawParameterValue("MASTER")->load();
 	float masterGain = currentMaster / 10.0f;
 	buffer.applyGain(masterGain);
+
+    {
+        const float target = juce::Decibels::decibelsToGain(outGainParam->load());
+        if (target != lastOutGain || target != 1.0f)
+            buffer.applyGainRamp(0, buffer.getNumSamples(), lastOutGain, target);
+        lastOutGain = target;
+    }
 
     if (tunerOn && tunerMute.load(std::memory_order_relaxed))
         buffer.clear();
@@ -694,6 +712,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
         juce::NormalisableRange<float>(20.0f, 300.0f, 1.0f, 0.5f), 20.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("CAB_HIGHCUT", "Cab High Cut",
         juce::NormalisableRange<float>(4000.0f, 20000.0f, 10.0f, 0.5f), 20000.0f));
+
+    // Rig levels (footer sliders): they match the guitar and the interface to the rig, so they belong
+    // to the setup, not to a tone. Presets leave them alone (see PresetManager::isRigSetting).
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("IN_GAIN", 1), "Input Gain",
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("OUT_GAIN", 1), "Output Gain",
+        juce::NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f));
 
     return { params.begin(), params.end() };
 }

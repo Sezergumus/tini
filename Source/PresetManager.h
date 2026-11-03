@@ -187,13 +187,21 @@ public:
     }
 
     //==========================================================================
-    /** Reads every parameter of `state` as plain values. */
+    /** The footer's input / output levels belong to the rig (guitar, interface), not to a tone: a
+        preset neither stores them nor changes them. */
+    static bool isRigSetting (const juce::String& paramID)
+    {
+        return paramID == "IN_GAIN" || paramID == "OUT_GAIN";
+    }
+
+    /** Reads every tone parameter of `state` as plain values (the rig settings are left out). */
     static std::map<juce::String, float> captureValues (juce::AudioProcessorValueTreeState& state)
     {
         std::map<juce::String, float> values;
         for (auto* p : state.processor.getParameters())
             if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p))
-                values[r->paramID] = r->convertFrom0to1 (r->getValue());
+                if (! isRigSetting (r->paramID))
+                    values[r->paramID] = r->convertFrom0to1 (r->getValue());
         return values;
     }
 
@@ -203,7 +211,7 @@ public:
         for (auto* p : state.processor.getParameters())
         {
             auto* r = dynamic_cast<juce::RangedAudioParameter*> (p);
-            if (r == nullptr)
+            if (r == nullptr || isRigSetting (r->paramID))
                 continue;
 
             const auto it = preset.values.find (r->paramID);
@@ -220,7 +228,7 @@ public:
         for (auto* p : state.processor.getParameters())
         {
             auto* r = dynamic_cast<juce::RangedAudioParameter*> (p);
-            if (r == nullptr)
+            if (r == nullptr || isRigSetting (r->paramID))
                 continue;
 
             const auto it = preset.values.find (r->paramID);

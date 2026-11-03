@@ -433,6 +433,33 @@ void renderUiSnapshots (const juce::File& dir)
             report (footer->getHeight() == Footer::height && footer->getBottom() <= Theme::designHeight, "the footer sits at the bottom");
             report (footer->inMeter.getX() < footer->getTunerButton().getX() && footer->outMeter.getX() > footer->getTunerButton().getX(),
                     "In is on the left, Out on the right, Tuner in the middle");
+
+            // everything in the footer shares one centre line
+            const int centre = footer->getHeight() / 2;
+            report (std::abs (footer->getTunerButton().getBounds().getCentreY() - centre) <= 1
+                        && std::abs (footer->inMeter.getBounds().getCentreY() - centre) <= 1
+                        && std::abs (footer->outMeter.getBounds().getCentreY() - centre) <= 1,
+                    "the meters and the Tuner button are centred on the same line");
+
+            // gain lines: drag sets the parameter, double click resets it
+            auto& in = footer->inMeter;
+            report (! in.getGainLineBounds().isEmpty(), "the In meter has a gain line");
+            const auto line = in.getGainLineBounds();
+            juce::MouseEvent down (juce::Desktop::getInstance().getMainMouseSource(),
+                                   line.getPosition().translated (line.getWidth() * 0.75f, line.getHeight() * 0.5f),
+                                   juce::ModifierKeys::leftButtonModifier, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                   &in, &in, juce::Time::getCurrentTime(), {}, juce::Time::getCurrentTime(), 1, false);
+            in.mouseDown (down);
+            in.mouseUp (down);
+            report (std::abs (p.apvts.getRawParameterValue ("IN_GAIN")->load() - 12.0f) < 0.2f,
+                    "clicking the gain line at 75 % sets +12 dB (" + juce::String (p.apvts.getRawParameterValue ("IN_GAIN")->load(), 1) + ")");
+            in.mouseDoubleClick (down);
+            report (std::abs (p.apvts.getRawParameterValue ("IN_GAIN")->load()) < 0.01f, "a double click puts the input gain back to 0 dB");
+
+            footer->outMeter.setGainDb (-6.0f);
+            settle();
+            save (*editor, dir.getChildFile ("ui_footer_gain.png"));
+            footer->outMeter.setGainDb (0.0f);
         }
         else
         {
@@ -949,6 +976,8 @@ void renderUiSnapshots (const juce::File& dir)
         report (settings != nullptr && blocks2.getOverlayKind() == BlockEditor::Overlay::settings, "the gear opens the Settings page");
         report (view->getGearButton().getToggleState(), "...and the gear stays lit");
         report (! blocks2.getAmpPage().isVisible(), "...and the block page steps aside");
+        report (! view->getChain().isVisible() && blocks2.getY() == view->getChain().getY(),
+                "...and the page also takes the chain strip's place (full window)");
         report (settings != nullptr && ! settings->hasAudioSelector(), "inside a plugin the host owns the audio device: no device selector");
         save (*editor, dir.getChildFile ("ui_settings_plugin.png"));
 
@@ -968,6 +997,17 @@ void renderUiSnapshots (const juce::File& dir)
         view->getGearButton().triggerClick();
         settleLoop (100);
         report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && blocks2.getAmpPage().isVisible(), "the gear closes the Settings page again");
+        report (view->getChain().isVisible() && blocks2.getY() > view->getChain().getY(), "...and the chain strip is back");
+
+        // the Done button inside the page closes it too
+        view->getGearButton().triggerClick();
+        settleLoop (100);
+        if (auto* page = dynamic_cast<SettingsPage*> (blocks2.getOverlay()))
+        {
+            page->getDoneButton().triggerClick();
+            settleLoop (100);
+        }
+        report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && view->getChain().isVisible(), "the Done button closes the Settings page");
 
         view->getGearButton().triggerClick();
         settleLoop (100);

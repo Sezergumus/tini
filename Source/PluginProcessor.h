@@ -143,6 +143,9 @@ private:
     std::atomic<float>* namInParam = nullptr;
     std::atomic<float>* namOutParam = nullptr;
     std::atomic<float>* namNormParam = nullptr;
+    std::atomic<float>* inGainParam = nullptr;
+    std::atomic<float>* outGainParam = nullptr;
+    float lastInGain = 1.0f, lastOutGain = 1.0f;   // linear gains of the previous block (audio thread)
 
     std::atomic<float> tunerReferenceHz{ 440.0f };
 

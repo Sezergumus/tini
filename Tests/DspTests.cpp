@@ -1056,6 +1056,87 @@ namespace
 
     float centsBetween (double measured, double expected) { return (float) (1200.0 * std::log2 (measured / expected)); }
 
+    //==========================================================================
+    void testRigGain()
+    {
+        std::printf ("\n-- input / output gain (footer sliders) --\n");
+
+        auto outputPeakFor = [] (NeuralFlowAmpAudioProcessor& p)
+        {
+            auto out = run (p, 12, [] (int, juce::AudioBuffer<float>& buf)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < buf.getNumSamples(); ++i)
+                        buf.setSample (ch, i, 0.05f * (float) std::sin (0.07 * i));
+            });
+            // judge the last blocks only: the gain ramp has settled by then
+            return out.getMagnitude (0, out.getNumSamples() - 2 * blockSize, 2 * blockSize);
+        };
+
+        {
+            Prepared a;
+            auto& p = a.proc;
+            makeTransparent (p);
+
+            const float base = outputPeakFor (p);
+            check (base > 0.0f, "the chain passes a signal (peak " + juce::String (base, 4) + ")");
+
+            setParam (p, "OUT_GAIN", -6.0f);
+            const float quieter = outputPeakFor (p);
+            check (std::abs (quieter / base - juce::Decibels::decibelsToGain (-6.0f)) < 0.01f,
+                   "OUT_GAIN -6 dB halves the output (ratio " + juce::String (quieter / base, 3) + ")");
+
+            setParam (p, "OUT_GAIN", 0.0f);
+            setParam (p, "IN_GAIN", 6.0f);
+            p.inputPeak.store (0.0f);
+            run (p, 4, [] (int, juce::AudioBuffer<float>& buf)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                    buf.setSample (ch, 3, 0.1f);
+            });
+            check (std::abs (p.inputPeak.load() - 0.1f * juce::Decibels::decibelsToGain (6.0f)) < 0.002f,
+                   "IN_GAIN +6 dB is applied before the input meter (" + juce::String (p.inputPeak.load(), 4) + ")");
+            setParam (p, "IN_GAIN", 0.0f);
+        }
+
+        // rig levels belong to the setup: a preset neither stores nor changes them
+        {
+            Prepared a;
+            auto& p = a.proc;
+            auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getChildFile ("nfa_rig_gain_" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+            p.presets.setUserFolder (folder);
+
+            setParam (p, "IN_GAIN", 6.0f);
+            setParam (p, "OUT_GAIN", -3.0f);
+            setParam (p, "DRIVE", 31.0f);
+            p.saveCurrentAsPreset ("Gain Test");
+
+            setParam (p, "IN_GAIN", -9.0f);
+            setParam (p, "OUT_GAIN", 4.0f);
+            setParam (p, "DRIVE", 80.0f);
+
+            p.loadPreset (p.presets.indexOf ("Gain Test"));
+            check (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 31.0f) < 0.01f, "the preset restores the tone");
+            check (std::abs (p.apvts.getRawParameterValue ("IN_GAIN")->load() + 9.0f) < 0.01f
+                       && std::abs (p.apvts.getRawParameterValue ("OUT_GAIN")->load() - 4.0f) < 0.01f,
+                   "...but leaves the input / output gain as they were");
+
+            p.loadPreset (0);   // factory / default
+            check (std::abs (p.apvts.getRawParameterValue ("IN_GAIN")->load() + 9.0f) < 0.01f,
+                   "a factory preset does not reset the input gain either");
+
+            // the session (state) does keep them
+            juce::MemoryBlock state;
+            p.getStateInformation (state);
+            setParam (p, "IN_GAIN", 0.0f);
+            p.setStateInformation (state.getData(), (int) state.getSize());
+            check (std::abs (p.apvts.getRawParameterValue ("IN_GAIN")->load() + 9.0f) < 0.01f, "the session saves the input gain");
+
+            folder.deleteRecursively();
+        }
+    }
+
     void testTuner()
     {
         std::printf ("\n-- tuner --\n");
@@ -1231,6 +1312,7 @@ int main (int argc, char** argv)
     testPresets();
     testPresetEditing();
     testTuner();
+    testRigGain();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

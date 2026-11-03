@@ -48,8 +48,14 @@ public:
         footer.onTunerClicked = [this] { toggleTuner(); };
         blocks.onOverlayChanged = [this]
         {
-            gearButton.setToggleState (blocks.getOverlayKind() == BlockEditor::Overlay::settings, juce::dontSendNotification);
+            const bool settingsOpen = blocks.getOverlayKind() == BlockEditor::Overlay::settings;
+
+            gearButton.setToggleState (settingsOpen, juce::dontSendNotification);
             footer.setTunerOpen (blocks.getOverlayKind() == BlockEditor::Overlay::tuner);
+
+            // Settings fills the area between header and footer, so the chain strip steps aside
+            chain.setVisible (! settingsOpen);
+            resized();
         };
 
         chain.onSelect = [this] (int block) { blocks.show (block); };
@@ -95,8 +101,13 @@ public:
         b.removeFromTop (headerH);
 
         footer.setBounds (b.removeFromBottom (footerH).reduced (margin, 0));
-        chain.setBounds (b.removeFromTop (chainH).reduced (margin, 0));
-        blocks.setBounds (b.reduced (margin, 0).withTrimmedBottom (8).withTrimmedTop (4));
+        const auto chainArea = b.removeFromTop (chainH).reduced (margin, 0);
+        chain.setBounds (chainArea);
+
+        auto blockArea = b.reduced (margin, 0).withTrimmedBottom (8).withTrimmedTop (4);
+        if (blocks.getOverlayKind() == BlockEditor::Overlay::settings)
+            blockArea.setTop (chainArea.getY());   // the page also takes the chain strip's place
+        blocks.setBounds (blockArea);
     }
 
     //==========================================================================
@@ -126,13 +137,24 @@ public:
                 toggle();
     }
 
-    /** Opens the Settings page in place of the block page, or closes it again. */
+    /** Opens the Settings page over the chain strip and the block page, or closes it again. */
     void toggleSettings()
     {
         if (blocks.getOverlayKind() == BlockEditor::Overlay::settings)
+        {
             blocks.closeOverlay();
+        }
         else
-            blocks.showOverlay (std::make_unique<SettingsPage> (processor), BlockEditor::Overlay::settings);
+        {
+            auto page = std::make_unique<SettingsPage> (processor);
+
+            // the Done button lives inside the page: close it after the click has returned
+            page->onClose = [safe = juce::Component::SafePointer<MainView> (this)]
+            {
+                juce::MessageManager::callAsync ([safe] { if (safe != nullptr) safe->blocks.closeOverlay(); });
+            };
+            blocks.showOverlay (std::move (page), BlockEditor::Overlay::settings);
+        }
     }
 
     /** Opens the tuner in place of the block page (the footer button), or closes it again. */

@@ -369,6 +369,9 @@ public:
     {
         const bool namMode = processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f;
 
+        const bool modeChanged = namMode != laidOutInNamMode;
+        laidOutInNamMode = namMode;
+
         builtInButton.setToggleState (! namMode, juce::dontSendNotification);
         namButton.setToggleState (namMode, juce::dontSendNotification);
         drive.setVisible (! namMode);
@@ -379,8 +382,8 @@ public:
         if (browser.isVisible() != showBrowser)
             browser.setVisible (showBrowser);
 
-        if (showBrowser != laidOutWithBrowser)
-            resized();   // the knobs make room for the list
+        if (modeChanged || showBrowser != laidOutWithBrowser)
+            resized();   // the knobs make room for the list; the whole page is repainted
 
         if (namMode)
             modelSlot.refresh();
@@ -448,6 +451,9 @@ public:
             place (*k, eqSection.removeFromLeft (cellW), 104);
 
         place (master, masterSection, 104);
+
+        // the dividers are painted here, not by a child: without this the old lines stay on screen
+        repaint();
     }
 
     // exposed so tests can drive them
@@ -459,6 +465,7 @@ private:
     static constexpr int browserWidth = 300;
     juce::File browsedFile;
     bool laidOutWithBrowser = false;
+    bool laidOutInNamMode = false;
 
     void setAmpType (int type)
     {
