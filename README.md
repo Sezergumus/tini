@@ -12,8 +12,6 @@ Built with [JUCE](https://juce.com) as a **standalone app** and a **VST3 plugin*
 - Standalone shows the real device round-trip latency (`≈ xx ms`) next to the driver name
 - ASIO support on Windows for low-latency playing (built in, nothing extra for users to install except their audio interface's ASIO driver, or [FlexASIO](https://github.com/dechamps/FlexASIO) / ASIO4ALL)
 
-See the [roadmap](docs/ROADMAP.md) for what is planned (NAM models, TONE3000 library, modular layout).
-
 ## Building (Windows)
 
 Requirements: Visual Studio 2022 (C++ workload), CMake 3.20+, Git. JUCE is downloaded automatically.

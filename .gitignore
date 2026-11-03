@@ -18,3 +18,5 @@ ipch/
 build/
 *.xcodeproj
 *.xcworkspace
+# Local documentation (not committed)
+docs/
