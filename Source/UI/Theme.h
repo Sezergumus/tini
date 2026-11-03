@@ -103,4 +103,24 @@ namespace Theme
     {
         return juce::jlimit (0.0f, 1.0f, (db - floorDb) / (0.0f - floorDb));
     }
+
+    /** Options for a popup menu opened by `owner`: it appears at the mouse (a right click) or under `below`,
+        and the menu is drawn with the look and feel of the app (the menu window is a desktop window of its own,
+        so it would not find that look by itself). */
+    inline void styleMenu (juce::PopupMenu& menu, juce::Component& owner)
+    {
+        menu.setLookAndFeel (&owner.getLookAndFeel());
+    }
+
+    inline juce::PopupMenu::Options menuAtMouse (juce::Component& owner)
+    {
+        return juce::PopupMenu::Options()
+            .withParentComponent (nullptr)
+            .withTargetScreenArea (juce::Rectangle<int> (juce::Desktop::getMousePosition(), juce::Desktop::getMousePosition()).expanded (1));
+    }
+
+    inline juce::PopupMenu::Options menuBelow (juce::Component& button)
+    {
+        return juce::PopupMenu::Options().withTargetScreenArea (button.getScreenBounds());
+    }
 }

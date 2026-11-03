@@ -96,6 +96,11 @@ public:
         list.onPick = [this] (const juce::File& file) { runPrimary (file); };
         list.isLoaded = [this] (const juce::File& file) { return isInUse (file); };
         list.onRenamed = [this] (const juce::File& oldFile, const juce::File& newFile) { fileRenamed (oldFile, newFile); };
+        list.onMoved = [this] (const juce::File& oldFile, const juce::File& newFile, Kind)
+        {
+            fileRenamed (oldFile, newFile);   // a model in use keeps being used from its new place
+            countFiles();
+        };
         list.onDeleted = [this] (const juce::File&) { updateActions(); countFiles(); };
         list.onEdited = [this] (const juce::File&) { updateActions(); repaint(); };
         list.onAdded = [this] (const juce::Array<juce::File>&) { countFiles(); };
@@ -423,12 +428,13 @@ private:
         return sig;
     }
 
+    /** Add files: models and impulse responses alike. Every file is sorted by itself (a model by the gear
+        type in its metadata, an audio file is a cab); the section of the file that came first opens. */
     void chooseFilesToAdd()
     {
-        const bool models = FileLibrary::isModelKind (section);
-        fileChooser = std::make_unique<juce::FileChooser> (models ? "Add models (.nam)" : "Add impulse responses",
+        fileChooser = std::make_unique<juce::FileChooser> ("Add models (.nam) or impulse responses",
                                                            FileLibrary::downloadsFolder(),
-                                                           FileLibrary::wildcardFor (section));
+                                                           FileLibrary::modelWildcard + ";" + FileLibrary::irWildcard);
 
         const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
                          | juce::FileBrowserComponent::canSelectMultipleItems;
@@ -436,10 +442,43 @@ private:
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<LibraryPage> (this)] (const juce::FileChooser& fc)
         {
             if (safe != nullptr)
-                safe->list.addFiles (fc.getResults());
+                safe->addSorted (fc.getResults());
         });
     }
 
+public:
+    /** Copies the files into the section they belong to. Returns how many came in. */
+    int addSorted (const juce::Array<juce::File>& sources)
+    {
+        int added = 0;
+        bool first = true;
+        Kind firstKind = section;
+
+        for (const auto& source : sources)
+        {
+            // a model without metadata goes where the open section is, if that is a model section
+            Kind kind;
+            if (! FileLibrary::kindOfFile (source, kind, FileLibrary::isModelKind (section) ? section : Kind::amps))
+                continue;
+
+            if (FileLibrary::importFile (source, kind).existsAsFile())
+            {
+                ++added;
+                if (first)
+                {
+                    firstKind = kind;
+                    first = false;
+                }
+            }
+        }
+
+        if (added > 0)
+            showSection (firstKind);
+
+        return added;
+    }
+
+private:
     /** The counts also follow files that came and went in the file manager. */
     void timerCallback() override
     {

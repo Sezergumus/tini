@@ -29,6 +29,11 @@ public:
         setColour (juce::ComboBox::arrowColourId,          Theme::textMid);
         setColour (juce::ComboBox::focusedOutlineColourId, Theme::accent);
 
+        // list boxes that nobody styled (the channel lists of the audio device selector)
+        setColour (juce::ListBox::backgroundColourId,      Theme::inset);
+        setColour (juce::ListBox::textColourId,            Theme::textHi);
+        setColour (juce::ListBox::outlineColourId,         Theme::panelBorder);
+
         // not quite opaque on purpose: the menu window then has transparent corners (see drawPopupMenuBackground)
         setColour (juce::PopupMenu::backgroundColourId,            Theme::surfaceHi.withAlpha ((juce::uint8) 254));
         setColour (juce::PopupMenu::textColourId,                  Theme::textHi);

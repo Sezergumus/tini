@@ -370,7 +370,8 @@ public:
         for (int i = 0; i < (int) orders.size(); ++i)
             menu.addItem (i + 1, LibraryFilter::sortName (orders[(size_t) i]), true, orders[(size_t) i] == list.getFilter().sort);
 
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sortButton),
+        Theme::styleMenu (menu, *this);
+        menu.showMenuAsync (Theme::menuBelow (sortButton),
                             [safe = juce::Component::SafePointer<FilterBar> (this), orders] (int choice)
         {
             if (safe != nullptr && choice > 0)

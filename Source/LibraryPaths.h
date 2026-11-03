@@ -190,6 +190,39 @@ namespace FileLibrary
         return source.copyFileTo (target) ? target : juce::File();
     }
 
+    /** Moves a model to the folder of `kind` (a numbered name if the name is taken) and sets its gear type
+        to match, unless the type already belongs to that section. Returns the new file; empty on failure. */
+    inline juce::File moveToKind (const juce::File& file, Kind kind)
+    {
+        if (! file.existsAsFile() || ! fits (file, kind))
+            return {};
+
+        ensureFolders();
+        auto target = libraryFolder (kind).getChildFile (file.getFileName());
+
+        if (target == file)
+            return file;
+
+        if (target.existsAsFile())
+            target = target.getNonexistentSibling (true);
+
+        if (! file.moveFileTo (target))
+            return {};
+
+        if (isModelKind (kind))
+        {
+            auto info = NamMetadata::read (target);
+            Kind now = Kind::amps;
+            if (! (kindOfGearType (info.gearType, now) && now == kind))
+            {
+                info.gearType = kind == Kind::pedals ? "pedal" : kind == Kind::amps ? "amp" : "amp_cab";
+                NamMetadata::write (target, info);
+            }
+        }
+
+        return target;
+    }
+
     /** Removes a library file: to the Recycle Bin / Trash (or for good when useTrash() is off). */
     inline bool removeFile (const juce::File& file)
     {

@@ -60,6 +60,9 @@ public:
     /** Called after what a model says about itself was changed (Edit); the file may have been renamed too. */
     std::function<void (const juce::File&)> onEdited;
 
+    /** Called after a file was moved to another section (old file, new file, the section it went to). */
+    std::function<void (const juce::File&, const juce::File&, FileLibrary::Kind)> onMoved;
+
     /** Called after files were copied in (with the files in the library); a drop or Add files. */
     std::function<void (const juce::Array<juce::File>&)> onAdded;
 
@@ -305,10 +308,23 @@ public:
             menu.addSeparator();
         }
         menu.addItem (2, kind == FileLibrary::Kind::cabs ? "Rename..." : "Edit info...");
+
+        // wrongly sorted? models can move between Amps, Pedals and Other
+        if (kind != FileLibrary::Kind::cabs)
+        {
+            juce::PopupMenu move;
+            for (auto k : { FileLibrary::Kind::amps, FileLibrary::Kind::pedals, FileLibrary::Kind::other })
+                if (k != kind)
+                    move.addItem (10 + (int) k, FileLibrary::folderName (k));
+
+            menu.addSubMenu ("Move to", move);
+        }
+
         menu.addItem (3, "Show in file manager");
         menu.addItem (4, "Delete...");
+        Theme::styleMenu (menu, *this);
 
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+        menu.showMenuAsync (Theme::menuAtMouse (*this),
                             [safe = juce::Component::SafePointer<ModelList> (this), file] (int choice)
         {
             if (safe == nullptr)
@@ -320,9 +336,31 @@ public:
                 case 2: safe->askEdit (file); break;
                 case 3: file.revealToUser(); break;
                 case 4: safe->askDelete (file); break;
-                default: break;
+                default:
+                    if (choice >= 10)
+                        safe->moveFile (file, (FileLibrary::Kind) (choice - 10));
+                    break;
             }
         });
+    }
+
+    /** Moves a model to another section: the file goes to that folder and its gear type follows, so it
+        stays there when it is classified again. */
+    bool moveFile (const juce::File& file, FileLibrary::Kind target)
+    {
+        const auto moved = FileLibrary::moveToKind (file, target);
+        if (! moved.existsAsFile())
+            return false;
+
+        if (selected == file)
+            selected = {};
+
+        rescan();
+
+        if (onMoved)
+            onMoved (file, moved, target);
+
+        return true;
     }
 
     /** Models: a dialog for the name and for what the file says about itself (make, model, type, tone).

@@ -347,8 +347,9 @@ public:
         menu.addItem (2, "Rename...");
         menu.addItem (3, "Show in file manager");
         menu.addItem (4, "Delete...");
+        Theme::styleMenu (menu, *this);
 
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+        menu.showMenuAsync (Theme::menuAtMouse (*this),
                             [safe = juce::Component::SafePointer<FileBrowserList> (this), file] (int choice)
         {
             if (safe == nullptr)
