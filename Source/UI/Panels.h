@@ -22,6 +22,12 @@ public:
         repaint (getLocalBounds().removeFromTop (headerHeight));
     }
 
+    void setChip (const juce::String& text)
+    {
+        chip = text;
+        repaint (getLocalBounds().removeFromTop (headerHeight));
+    }
+
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
@@ -309,53 +315,208 @@ private:
 class LeadChannelPanel : public PanelBase
 {
 public:
-    explicit LeadChannelPanel (juce::AudioProcessorValueTreeState& apvts)
+    explicit LeadChannelPanel (NeuralFlowAmpAudioProcessor& p)
         : PanelBase ("LEAD CHANNEL", "ANALOG MODEL"),
+          processor (p),
           drive  ("DRIVE",  Theme::amber,  1),
+          namIn  ("INPUT",  Theme::amber,  1, " dB"),
           low    ("LOW",    Theme::accent, 1),
           mid    ("MID",    Theme::accent, 1),
           high   ("HIGH",   Theme::accent, 1),
           master ("MASTER", Theme::accent, 1)
     {
-        setStatus ("ACTIVE", true);
+        auto& apvts = processor.apvts;
 
         addAndMakeVisible (scope);
 
         drive.attach  (apvts, "DRIVE");
+        namIn.attach  (apvts, "NAM_IN");
         low.attach    (apvts, "LOW");
         mid.attach    (apvts, "MID");
         high.attach   (apvts, "HIGH");
         master.attach (apvts, "MASTER");
 
-        for (auto* k : { &drive, &low, &mid, &high, &master })
+        for (auto* k : { &drive, &namIn, &low, &mid, &high, &master })
             addAndMakeVisible (k);
+
+        // amp type switch in the header
+        builtInButton.setButtonText ("BUILT-IN");
+        namButton.setButtonText ("NAM");
+        for (auto* b : { &builtInButton, &namButton })
+        {
+            b->setClickingTogglesState (false);
+            addAndMakeVisible (b);
+        }
+        builtInButton.onClick = [this] { setAmpType (0); };
+        namButton.onClick     = [this] { setAmpType (1); };
+        headerRightInset = 2 * 84 + 14;
+
+        // model card
+        loadButton.setButtonText ("LOAD MODEL");
+        loadButton.onClick = [this] { chooseFile(); };
+        clearButton.setButtonText ("CLEAR");
+        clearButton.onClick = [this] { processor.unloadNamModel(); refresh(); };
+        levelButton.setButtonText ("LEVEL MATCH");
+        levelButton.setTooltip ("Level every model to the same loudness (-18 dB)");
+        levelButton.setClickingTogglesState (true);
+        levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "NAM_NORM", levelButton);
+        for (auto* b : { &loadButton, &clearButton, &levelButton })
+            addAndMakeVisible (b);
+
+        refresh();
+    }
+
+    /** Called from the UI timer: follows the amp type parameter and the model's loading state. */
+    void refresh()
+    {
+        const bool namMode = processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f;
+        const auto status = processor.nam.getStatus();
+        const auto info = processor.nam.getModelInfo();
+
+        juce::String name, detail;
+        using State = NamEngine::Status::State;
+
+        switch (status.state)
+        {
+            case State::empty:   name = "No model loaded"; detail = namMode ? "USING THE BUILT-IN AMP UNTIL A MODEL IS LOADED" : "LOAD A .NAM FILE TO USE IT AS THE AMP"; break;
+            case State::loading: name = processor.nam.getFile().getFileNameWithoutExtension(); detail = "LOADING..."; break;
+            case State::failed:  name = processor.nam.getFile().getFileName(); detail = "COULD NOT LOAD: " + status.message.upToFirstOccurrenceOf ("\n", false, false); break;
+            case State::ready:
+                name = info.name;
+                detail = (info.trainingRate > 0.0 ? juce::String (info.trainingRate / 1000.0, 1) + " kHz" : juce::String ("? kHz"))
+                         + (info.hasLoudness ? "  |  " + juce::String (info.loudnessDb, 1) + " dB" : juce::String())
+                         + (info.resampled ? "  |  RESAMPLED" : juce::String());
+                break;
+        }
+
+        juce::String statusText;
+        bool dot = false;
+        if (! namMode)                               { statusText = "ACTIVE"; dot = true; }
+        else if (status.state == State::ready)       { statusText = "NAM ACTIVE"; dot = true; }
+        else if (status.state == State::loading)     { statusText = "LOADING"; }
+        else if (status.state == State::failed)      { statusText = "MODEL ERROR"; }
+        else                                         { statusText = "NO MODEL"; }
+
+        const bool changed = namMode != shownNamMode || name != modelName || detail != modelDetail || statusText != shownStatus;
+        if (! changed)
+            return;
+
+        shownNamMode = namMode;
+        modelName = name;
+        modelDetail = detail;
+        shownStatus = statusText;
+
+        setStatus (statusText, dot);
+        setChip (namMode ? "NAM MODEL" : "ANALOG MODEL");
+
+        builtInButton.setToggleState (! namMode, juce::dontSendNotification);
+        namButton.setToggleState (namMode, juce::dontSendNotification);
+        drive.setVisible (! namMode);
+        namIn.setVisible (namMode);
+        clearButton.setEnabled (status.state != State::empty);
+        repaint();
     }
 
     void paint (juce::Graphics& g) override
     {
         PanelBase::paint (g);
         Theme::drawInset (g, knobArea.toFloat(), 8.0f);
+        Theme::drawInset (g, modelCard.toFloat(), 8.0f);
+
+        auto text = modelCard.reduced (14, 8).withTrimmedRight (buttonsWidth + 10);
+        const bool hasModel = processor.nam.getStatus().state != NamEngine::Status::State::empty;
+
+        g.setColour (hasModel ? Theme::textHi : Theme::textLo);
+        g.setFont (Theme::mono (12.5f));
+        g.drawText (modelName, text.removeFromTop (text.getHeight() / 2 + 2), juce::Justification::centredLeft, true);
+
+        g.setColour (modelDetail.startsWith ("COULD NOT") ? Theme::amber : Theme::textLo);
+        g.setFont (Theme::ui (9.0f, true, 0.12f));
+        g.drawText (modelDetail, text, juce::Justification::centredLeft, true);
     }
 
     void resized() override
     {
+        auto bar = juce::Rectangle<int> (getWidth() - 20 - 84, (headerHeight - 28) / 2, 84, 28);
+        namButton.setBounds (bar);
+        builtInButton.setBounds (bar.translated (-86, 0));
+
         auto b = getContentBounds();
 
         knobArea = b.removeFromRight (juce::roundToInt ((float) b.getWidth() * 0.50f));
         b.removeFromRight (16);
+
+        modelCard = b.removeFromBottom (58);
+        b.removeFromBottom (10);
         scope.setBounds (b);
+
+        auto buttons = modelCard.reduced (12, 0).withSizeKeepingCentre (modelCard.getWidth() - 24, 28);
+        clearButton.setBounds (buttons.removeFromRight (56));
+        buttons.removeFromRight (6);
+        levelButton.setBounds (buttons.removeFromRight (100));
+        buttons.removeFromRight (6);
+        loadButton.setBounds (buttons.removeFromRight (92));
 
         auto inner = knobArea.reduced (10, 12);
         const int w = inner.getWidth() / 5;
-        for (auto* k : { &drive, &low, &mid, &high, &master })
+
+        auto first = inner.removeFromLeft (w);
+        drive.setBounds (first);
+        namIn.setBounds (first);
+        for (auto* k : { &low, &mid, &high, &master })
             k->setBounds (inner.removeFromLeft (w));
     }
 
     WaveformView scope;
 
+    // exposed so tests can drive them
+    juce::TextButton builtInButton, namButton, loadButton, clearButton;
+    juce::TextButton levelButton;
+
 private:
-    LabeledKnob drive, low, mid, high, master;
-    juce::Rectangle<int> knobArea;
+    static constexpr int buttonsWidth = 92 + 100 + 56 + 12;
+
+    void setAmpType (int type)
+    {
+        if (auto* param = processor.apvts.getParameter ("AMP_TYPE"))
+        {
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->convertTo0to1 ((float) type));
+            param->endChangeGesture();
+        }
+        refresh();
+    }
+
+    void chooseFile()
+    {
+        const auto current = processor.nam.getFile();
+        fileChooser = std::make_unique<juce::FileChooser> ("Select a Neural Amp Modeler model (.nam)",
+                                                           current.existsAsFile()
+                                                               ? current.getParentDirectory()
+                                                               : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                           "*.nam");
+
+        const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+        fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<LeadChannelPanel> (this)] (const juce::FileChooser& fc)
+        {
+            const auto file = fc.getResult();
+            if (safe == nullptr || ! file.existsAsFile())
+                return;
+
+            safe->processor.loadNamModel (file);
+            safe->setAmpType (1);   // picking a model means the user wants to hear it
+        });
+    }
+
+    NeuralFlowAmpAudioProcessor& processor;
+    LabeledKnob drive, namIn, low, mid, high, master;
+    juce::Rectangle<int> knobArea, modelCard;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> levelAttachment;
+
+    bool shownNamMode = false;
+    juce::String modelName, modelDetail, shownStatus;
 };
 
 /** Placeholder card at the end of the chain: click to insert another pedal. */

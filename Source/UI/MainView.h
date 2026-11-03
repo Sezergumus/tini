@@ -14,7 +14,7 @@ public:
     explicit MainView (NeuralFlowAmpAudioProcessor& p)
         : processor (p),
           inputMeter ("INPUT"), outputMeter ("OUTPUT"),
-          presetBar (p), lead (p.apvts), chain (p), cabPanel (p)
+          presetBar (p), lead (p), chain (p), cabPanel (p)
     {
         setLookAndFeel (&laf);
 
@@ -133,6 +133,7 @@ private:
         cabPanel.setLevel (Theme::dbToUnit (outDb, -48.0f));
 
         presetBar.refresh();
+        lead.refresh();
         chain.refresh();
 
         if (++frame % 30 == 0)

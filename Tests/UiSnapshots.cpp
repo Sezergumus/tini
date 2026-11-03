@@ -310,6 +310,66 @@ void renderUiSnapshots (const juce::File& dir)
     }
 
     //==========================================================================
+    // NAM amp slot: type switch and model card.
+    if (auto* lead = findFirst<LeadChannelPanel> (*editor))
+    {
+        const auto model = juce::File (__FILE__).getParentDirectory().getChildFile ("models").getChildFile ("test_wavenet.nam");
+        auto ampType = [&] { return p.apvts.getRawParameterValue ("AMP_TYPE")->load(); };
+
+        p.unloadNamModel();
+        setParam (p, "AMP_TYPE", 0.0f);
+        settle();
+
+        report (lead->builtInButton.getToggleState() && ! lead->namButton.getToggleState(), "the built-in amp is selected at first");
+        save (*editor, dir.getChildFile ("ui_amp_builtin.png"));
+
+        lead->namButton.triggerClick();
+        settleLoop (100);
+        report (ampType() > 0.5f && lead->namButton.getToggleState() && ! lead->builtInButton.getToggleState(),
+                "the NAM button switches the amp to NAM");
+        save (*editor, dir.getChildFile ("ui_amp_nam_empty.png"));
+
+        p.loadNamModel (model);
+        for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+            settleLoop (10);
+        settle();
+        report (p.nam.getStatus().state == NamEngine::Status::State::ready && p.nam.hasModel(), "a model loads while the UI is running");
+        save (*editor, dir.getChildFile ("ui_amp_nam_loaded.png"));
+
+        const float levelBefore = p.apvts.getRawParameterValue ("NAM_NORM")->load();
+        lead->levelButton.triggerClick();
+        settleLoop (50);
+        report ((p.apvts.getRawParameterValue ("NAM_NORM")->load() > 0.5f) != (levelBefore > 0.5f),
+                "LEVEL MATCH toggles the normalisation (" + juce::String (levelBefore) + " -> "
+                    + juce::String (p.apvts.getRawParameterValue ("NAM_NORM")->load())
+                    + ", button on: " + juce::String ((int) lead->levelButton.getToggleState())
+                    + ", clicks toggle: " + juce::String ((int) lead->levelButton.getClickingTogglesState()) + ")");
+        lead->levelButton.triggerClick();
+        settleLoop (50);
+
+        lead->clearButton.triggerClick();
+        settle();
+        report (p.nam.getStatus().state == NamEngine::Status::State::empty && ! p.nam.hasModel(), "CLEAR removes the model");
+
+        auto bad = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ui_broken.nam");
+        bad.replaceWithText ("not a model");
+        p.loadNamModel (bad);
+        for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+            settleLoop (10);
+        settle();
+        report (p.nam.getStatus().state == NamEngine::Status::State::failed, "a broken file shows as failed");
+        save (*editor, dir.getChildFile ("ui_amp_nam_error.png"));
+        bad.deleteFile();
+
+        p.unloadNamModel();
+        lead->builtInButton.triggerClick();
+        settle();
+        report (ampType() < 0.5f && lead->builtInButton.getToggleState(), "the BUILT-IN button switches back");
+    }
+    else
+        report (false, "the lead channel panel exists");
+
+    //==========================================================================
     // Presets: header bar, stepping, edited marker, save dialog.
     p.loadPreset (p.presets.indexOf ("Default"));
     settle();

@@ -163,19 +163,24 @@ public:
             return;
         }
 
+        // a button that is switched on (toggle / segmented control) keeps an accent tint
+        const bool on = button.getToggleState();
+
         g.setColour (down ? Theme::accent.withAlpha (0.25f)
-                          : highlighted ? Theme::accent.withAlpha (0.14f)
-                                        : juce::Colours::white.withAlpha (0.05f));
+                          : highlighted ? Theme::accent.withAlpha (on ? 0.26f : 0.14f)
+                                        : on ? Theme::accent.withAlpha (0.18f)
+                                             : juce::Colours::white.withAlpha (0.05f));
         g.fillRoundedRectangle (r, 5.0f);
 
-        g.setColour (highlighted || down ? Theme::accent.withAlpha (0.85f) : juce::Colour (0xff343b43));
+        g.setColour (highlighted || down || on ? Theme::accent.withAlpha (on ? 0.9f : 0.85f) : juce::Colour (0xff343b43));
         g.drawRoundedRectangle (r, 5.0f, 1.0f);
     }
 
     void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool highlighted, bool) override
     {
         g.setFont (getTextButtonFont (button, button.getHeight()));
-        g.setColour (! button.isEnabled() ? Theme::textLo : highlighted ? Theme::accent.brighter (0.3f) : Theme::textHi);
+        g.setColour (! button.isEnabled() ? Theme::textLo
+                     : highlighted || button.getToggleState() ? Theme::accent.brighter (0.3f) : Theme::textHi);
         g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
     }
 };
