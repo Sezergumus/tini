@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(NeuralFlowAmp VERSION 1.0.0)
 
 # JUCE library is automatically downloaded from GitHub
@@ -31,6 +31,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nam_core eigen)
 
 file(GLOB NAM_CORE_SOURCES "${nam_core_SOURCE_DIR}/NAM/*.cpp" "${nam_core_SOURCE_DIR}/NAM/*/*.cpp")
+# The core registers its model architectures (WaveNet, LSTM, ...) from static initialisers, which a
+# linker drops from a static library unless the whole archive is linked (see WHOLE_ARCHIVE below).
 add_library(nam_core_lib STATIC ${NAM_CORE_SOURCES})
 target_include_directories(nam_core_lib SYSTEM PUBLIC
     "${nam_core_SOURCE_DIR}"
@@ -124,7 +126,7 @@ target_link_libraries(NeuralFlowAmp PRIVATE
     juce::juce_audio_processors
     juce::juce_dsp 
     juce::juce_gui_extra
-    nam_core_lib
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,nam_core_lib>
 )
 
 # Special configuration for standalone (executable) version
@@ -145,7 +147,7 @@ target_compile_definitions(NeuralFlowAmpTests PRIVATE
 
 target_link_libraries(NeuralFlowAmpTests PRIVATE
     NeuralFlowAmp
-    nam_core_lib
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,nam_core_lib>
     juce::juce_audio_utils
     juce::juce_audio_processors
     juce::juce_dsp

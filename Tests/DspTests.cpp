@@ -472,6 +472,196 @@ namespace
     }
 
     //==========================================================================
+    juce::File testModel()
+    {
+        return juce::File (__FILE__).getParentDirectory().getChildFile ("models").getChildFile ("test_wavenet.nam");
+    }
+
+    /** Loads happen on a background thread; the audio thread picks the model up in its next block. */
+    bool waitForNam (NeuralFlowAmpAudioProcessor& p)
+    {
+        for (int i = 0; i < 500; ++i)
+        {
+            const auto state = p.nam.getStatus().state;
+            if (state == NamEngine::Status::State::ready || state == NamEngine::Status::State::failed)
+                break;
+            juce::Thread::sleep (10);
+        }
+        run (p, 2, [] (int, juce::AudioBuffer<float>&) {});
+        return p.nam.getStatus().state == NamEngine::Status::State::ready;
+    }
+
+    bool allFinite (const juce::AudioBuffer<float>& b)
+    {
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                if (! std::isfinite (b.getSample (ch, i)))
+                    return false;
+        return true;
+    }
+
+    void testNamModel()
+    {
+        std::printf ("\n-- NAM model --\n");
+        const int from = 20 * blockSize;
+        const auto model = testModel();
+        check (model.existsAsFile(), "the test model file is there");
+
+        const auto builtIn = sineThrough (0.1f, [] (auto&) {});
+
+        // Picking NAM without a model keeps the built-in amp.
+        {
+            const auto out = sineThrough (0.1f, [] (auto& p) { setParam (p, "AMP_TYPE", 1.0f); });
+            check (differenceRms (out, builtIn, from) < 1.0e-6f, "AMP_TYPE = NAM without a model falls back to the built-in amp");
+        }
+
+        // With a model the sound changes and stays sane.
+        {
+            bool loaded = false;
+            const auto namOut = sineThrough (0.1f, [&] (auto& p)
+            {
+                setParam (p, "AMP_TYPE", 1.0f);
+                p.loadNamModel (model);
+                loaded = waitForNam (p);
+
+                const auto info = p.nam.getModelInfo();
+                check (info.name == "test_wavenet" && info.hasLoudness && info.trainingRate > 0.0,
+                       "model info is read: " + info.name + ", " + juce::String (info.trainingRate) + " Hz, "
+                           + juce::String (info.loudnessDb, 1) + " dB");
+                check (! info.resampled, "no resampling at the training rate");
+            });
+            check (loaded, "the model loads in the background");
+            check (allFinite (namOut) && rms (namOut, 0, from) > 1.0e-4f, "the model produces a finite, audible signal");
+            check (differenceRms (namOut, builtIn, from) > 0.1f * rms (builtIn, 0, from), "the model sounds different from the built-in amp");
+        }
+
+        // The output trim and normalisation work.
+        {
+            auto withOut = [&] (float db, bool normalise)
+            {
+                return rms (sineThrough (0.1f, [&] (auto& p)
+                {
+                    setParam (p, "AMP_TYPE", 1.0f);
+                    setParam (p, "NAM_OUT", db);
+                    setParam (p, "NAM_NORM", normalise ? 1.0f : 0.0f);
+                    p.loadNamModel (model);
+                    waitForNam (p);
+                }), 0, from);
+            };
+
+            const float plain = withOut (0.0f, false), louder = withOut (6.0f, false);
+            check (std::abs (louder / plain - 2.0f) < 0.1f, "NAM output +6 dB doubles the level (ratio " + juce::String (louder / plain, 2) + ")");
+
+            const float normalised = withOut (0.0f, true);
+            const float expected = juce::Decibels::decibelsToGain ((float) (NamEngine::targetLoudnessDb + 20.020729));
+            check (std::abs (normalised / plain - expected) < 0.05f * expected, "normalising levels the model to -18 dB loudness");
+        }
+
+        // A broken file reports an error and does not disturb the sound.
+        {
+            auto bad = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("nfa_broken.nam");
+            bad.replaceWithText ("this is not a model");
+
+            Prepared prepared;
+            auto& p = prepared.proc;
+            setParam (p, "AMP_TYPE", 1.0f);
+            p.loadNamModel (bad);
+            const bool ready = waitForNam (p);
+            check (! ready && p.nam.getStatus().state == NamEngine::Status::State::failed && p.nam.getStatus().message.isNotEmpty(),
+                   "a broken model file is reported as failed: " + p.nam.getStatus().message);
+            check (! p.nam.hasModel(), "...and no model is active");
+            bad.deleteFile();
+        }
+
+        // Unloading goes back to the built-in amp.
+        {
+            const auto out = sineThrough (0.1f, [&] (auto& p)
+            {
+                setParam (p, "AMP_TYPE", 1.0f);
+                p.loadNamModel (model);
+                waitForNam (p);
+                p.unloadNamModel();
+                run (p, 2, [] (int, juce::AudioBuffer<float>&) {});
+            });
+            // (a tiny difference is left over from the model's last blocks decaying in the filters)
+            check (differenceRms (out, builtIn, from) < 0.002f * rms (builtIn, 0, from), "unloading the model returns to the built-in amp");
+        }
+
+        // Another host rate: the model is resampled, blocks larger than prepared are fine.
+        {
+            NeuralFlowAmpAudioProcessor p;
+            p.setRateAndBufferSizeDetails (44100.0, 256);
+            p.prepareToPlay (44100.0, 256);
+            setParam (p, "AMP_TYPE", 1.0f);
+            p.loadNamModel (model);
+            const bool loaded = waitForNam (p);
+
+            check (loaded && p.nam.getModelInfo().resampled && p.nam.getLatencySamples() > 0, "at 44.1 kHz the model is resampled");
+
+            juce::AudioBuffer<float> big (2, 1000);   // larger than the 256 samples prepared
+            juce::MidiBuffer midi;
+            bool finite = true;
+            for (int b = 0; b < 20; ++b)
+            {
+                for (int i = 0; i < big.getNumSamples(); ++i)
+                    for (int ch = 0; ch < 2; ++ch)
+                        big.setSample (ch, i, 0.1f * std::sin (0.03f * (float) (b * 1000 + i)));
+                p.processBlock (big, midi);
+                finite = finite && allFinite (big);
+            }
+            check (finite && big.getMagnitude (0, 1000) > 1.0e-4f, "resampled output is finite and audible, also for oversized blocks");
+        }
+
+        // A change of host rate reloads the model for the new rate.
+        {
+            NeuralFlowAmpAudioProcessor p;
+            p.setRateAndBufferSizeDetails (48000.0, 512);
+            p.prepareToPlay (48000.0, 512);
+            setParam (p, "AMP_TYPE", 1.0f);
+            p.loadNamModel (model);
+            waitForNam (p);
+            check (! p.nam.getModelInfo().resampled, "model prepared at 48 kHz is not resampled");
+
+            p.setRateAndBufferSizeDetails (96000.0, 512);
+            p.prepareToPlay (96000.0, 512);
+            check (waitForNam (p) && p.nam.getModelInfo().resampled, "preparing at 96 kHz reloads the model with resampling");
+        }
+
+        // The model is part of the saved state and of user presets.
+        {
+            juce::MemoryBlock saved;
+            {
+                Prepared a;
+                a.proc.loadNamModel (model);
+                waitForNam (a.proc);
+                a.proc.getStateInformation (saved);
+            }
+            Prepared b;
+            b.proc.setStateInformation (saved.getData(), (int) saved.getSize());
+            check (waitForNam (b.proc) && b.proc.nam.getFile() == model, "state restores the NAM model");
+        }
+        {
+            auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("nfa_nam_preset_test");
+            folder.deleteRecursively();
+
+            Prepared a;
+            a.proc.presets.setUserFolder (folder);
+            a.proc.loadNamModel (model);
+            waitForNam (a.proc);
+            const int index = a.proc.saveCurrentAsPreset ("With Model");
+
+            Prepared b;
+            b.proc.presets.setUserFolder (folder);
+            const int found = b.proc.presets.indexOf ("With Model");
+            check (index >= 0 && found >= 0 && b.proc.presets.get (found).namPath == model.getFullPathName(), "a user preset stores the NAM model path");
+
+            b.proc.loadPreset (found);
+            check (waitForNam (b.proc) && b.proc.nam.getFile() == model, "loading that preset loads the model");
+            folder.deleteRecursively();
+        }
+    }
+
+    //==========================================================================
     void testPedalCopies()
     {
         std::printf ("\n-- pedal copies --\n");
@@ -811,6 +1001,7 @@ int main (int argc, char** argv)
     testAddOnPedals();
     testChainOrder();
     testNamCoreIsLinked();
+    testNamModel();
     testPedalCopies();
     testPresets();
     testPresetEditing();

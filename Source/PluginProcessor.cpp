@@ -24,6 +24,11 @@ NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
 {
 	formatManager.registerBasicFormats();
 
+    ampTypeParam = apvts.getRawParameterValue("AMP_TYPE");
+    namInParam   = apvts.getRawParameterValue("NAM_IN");
+    namOutParam  = apvts.getRawParameterValue("NAM_OUT");
+    namNormParam = apvts.getRawParameterValue("NAM_NORM");
+
     for (int item = 0; item < PedalCatalog::ampItem; ++item)
     {
         auto& cache = pedalParams[(size_t) item];
@@ -113,6 +118,7 @@ void NeuralFlowAmpAudioProcessor::changeProgramName (int index, const juce::Stri
 void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
 	crunchEffect.prepare(sampleRate, samplesPerBlock);
+	nam.prepare(sampleRate, samplesPerBlock);
    
 	juce::dsp::ProcessSpec spec;
 	spec.sampleRate = sampleRate;
@@ -347,9 +353,15 @@ void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<floa
 void NeuralFlowAmpAudioProcessor::processAmp (juce::AudioBuffer<float>& buffer,
                                               juce::dsp::ProcessContextReplacing<float>& context)
 {
-    // Preamp Drive
-    crunchEffect.setDrive(apvts.getRawParameterValue("DRIVE")->load());
-    crunchEffect.process(buffer);
+    // Preamp: a Neural Amp Modeler model if one is selected and ready, otherwise the built-in amp
+    const bool namUsed = ampTypeParam->load() > 0.5f
+                      && nam.process(buffer, namInParam->load(), namOutParam->load(), namNormParam->load() > 0.5f);
+
+    if (! namUsed)
+    {
+        crunchEffect.setDrive(apvts.getRawParameterValue("DRIVE")->load());
+        crunchEffect.process(buffer);
+    }
 
     // EQ
     const float lowDb  = juce::jmap(apvts.getRawParameterValue("LOW")->load(),  0.0f, 10.0f, -15.0f, 15.0f);
@@ -427,6 +439,9 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
     if (preset.irPath.isNotEmpty())
         loadImpulseResponse (juce::File (preset.irPath));   // ignored if the file is gone
 
+    if (preset.namPath.isNotEmpty() && juce::File (preset.namPath).existsAsFile())
+        loadNamModel (juce::File (preset.namPath));
+
     currentPresetName = preset.name;
     if (index < presets.getNumFactory())
         currentProgram = index;
@@ -441,6 +456,7 @@ int NeuralFlowAmpAudioProcessor::saveCurrentAsPreset (const juce::String& name)
     preset.values = PresetManager::captureValues (apvts);
     preset.order = getChainOrder();
     preset.irPath = loadedIrFile.existsAsFile() ? loadedIrFile.getFullPathName() : juce::String();
+    preset.namPath = nam.getFile().existsAsFile() ? nam.getFile().getFullPathName() : juce::String();
 
     const int index = presets.saveUserPreset (std::move (preset));
     if (index >= 0)
@@ -508,6 +524,7 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
     // Parameters plus the path of the loaded IR, stored as XML.
     auto state = apvts.copyState();
     state.setProperty("irPath", loadedIrFile.getFullPathName(), nullptr);
+    state.setProperty("namPath", nam.getFile().getFullPathName(), nullptr);
     state.setProperty("chain", PedalCatalog::orderToString(getChainOrder()), nullptr);
     state.setProperty("presetName", currentPresetName, nullptr);
 
@@ -543,6 +560,12 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
     const juce::File irFile(state.getProperty("irPath").toString());
     if (irFile.existsAsFile())
         loadImpulseResponse(irFile);
+
+    const juce::File namFile(state.getProperty("namPath").toString());
+    if (namFile.existsAsFile())
+        loadNamModel(namFile);
+    else
+        unloadNamModel();
 }
 
 //==============================================================================
@@ -560,6 +583,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     params.push_back(std::make_unique<juce::AudioParameterFloat>("MID", "Mid", 0.0f, 10.0f, 5.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("HIGH", "High", 0.0f, 10.0f, 5.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("MASTER", "Master", 0.0f, 10.0f, 5.0f));
+
+    // Amp slot: built-in amp or a Neural Amp Modeler model
+    params.push_back(std::make_unique<juce::AudioParameterChoice>("AMP_TYPE", "Amp Type", juce::StringArray { "Built-in", "NAM" }, 0));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("NAM_IN", "NAM Input", -24.0f, 24.0f, 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("NAM_OUT", "NAM Output", -24.0f, 24.0f, 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterBool>("NAM_NORM", "NAM Normalise", true));
 
     // Pedals. Every pedal type exists maxCopies times; copy 0 keeps the plain ids, the others get a
     // "_2", "_3" suffix (see PedalCatalog::suffixedId). *_ADDED says whether a copy is in the chain
@@ -624,6 +653,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
         juce::NormalisableRange<float>(4000.0f, 20000.0f, 10.0f, 0.5f), 20000.0f));
 
     return { params.begin(), params.end() };
+}
+
+void NeuralFlowAmpAudioProcessor::loadNamModel(const juce::File& file)
+{
+    if (file.existsAsFile())
+        nam.loadModel(file);
+}
+
+void NeuralFlowAmpAudioProcessor::unloadNamModel()
+{
+    nam.unload();
 }
 
 void NeuralFlowAmpAudioProcessor::loadImpulseResponse(const juce::File& file) {

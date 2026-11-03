@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "Crunch.h"
 #include "DSP/StereoDelay.h"
+#include "DSP/NamEngine.h"
 #include "PedalCatalog.h"
 #include "PresetManager.h"
 
@@ -90,6 +91,12 @@ public:
 
     juce::File loadedIrFile; // last IR chosen by the user (message thread only)
 
+    /** Neural Amp Modeler model of the amp slot. AMP_TYPE selects between it and the built-in amp;
+        while no model is loaded (or it is still loading) the built-in amp is used. */
+    NamEngine nam;
+    void loadNamModel(const juce::File& file);   // background load, see nam.getStatus()
+    void unloadNamModel();
+
     juce::dsp::Convolution cabSimulator;
     juce::AudioFormatManager formatManager;
 private:
@@ -118,6 +125,11 @@ private:
         float value (int i) const { return knob[(size_t) i]->load(); }
     };
     std::array<PedalParams, PedalCatalog::ampItem> pedalParams;
+
+    std::atomic<float>* ampTypeParam = nullptr;
+    std::atomic<float>* namInParam = nullptr;
+    std::atomic<float>* namOutParam = nullptr;
+    std::atomic<float>* namNormParam = nullptr;
 
     juce::String currentPresetName; // empty = untitled
     int currentProgram = 0;         // factory preset last reported to the host

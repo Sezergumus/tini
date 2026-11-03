@@ -14,7 +14,7 @@ Built with [JUCE](https://juce.com) as a **standalone app** and a **VST3 plugin*
 
 ## Building (Windows)
 
-Requirements: Visual Studio 2022 (C++ workload), CMake 3.20+, Git. JUCE is downloaded automatically.
+Requirements: Visual Studio 2022 (C++ workload), CMake 3.24+, Git. JUCE is downloaded automatically.
 
 ```powershell
 cmake -B build

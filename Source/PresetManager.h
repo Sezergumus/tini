@@ -20,6 +20,7 @@ public:
         std::map<juce::String, float> values;   // parameter id -> plain value; missing = parameter default
         PedalCatalog::ChainOrder order = PedalCatalog::defaultOrder();
         juce::String irPath;                    // empty = leave the current IR alone
+        juce::String namPath;                   // empty = leave the current NAM model alone
         juce::File file;                        // user presets only
     };
 
@@ -241,6 +242,7 @@ private:
         xml.setAttribute ("name", preset.name);
         xml.setAttribute ("chain", PedalCatalog::orderToString (preset.order));
         xml.setAttribute ("irPath", preset.irPath);
+        xml.setAttribute ("namPath", preset.namPath);
 
         for (const auto& [id, value] : preset.values)
         {
@@ -262,6 +264,7 @@ private:
         preset.name = xml->getStringAttribute ("name", file.getFileNameWithoutExtension()).trim();
         preset.file = file;
         preset.irPath = xml->getStringAttribute ("irPath");
+        preset.namPath = xml->getStringAttribute ("namPath");
 
         if (preset.name.isEmpty())
             return std::nullopt;
