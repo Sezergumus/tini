@@ -1097,6 +1097,71 @@ namespace
         check (! NamMetadata::parse ("{\"metadata\":{\"name\":\"cut off").found, "a cut off metadata object reports none");
         check (! NamMetadata::read (models.getChildFile ("missing.nam")).found, "a missing file reports none");
 
+        // editing: only the metadata object changes, the rest of the file stays as it was
+        {
+            auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("tini_meta_write_test");
+            scratch.deleteRecursively();
+            scratch.createDirectory();
+
+            for (const char* name : { "test_wavenet.nam", "test_a2.nam" })
+            {
+                const auto copy = scratch.getChildFile (name);
+                models.getChildFile (name).copyFileTo (copy);
+                const auto original = copy.loadFileAsString();
+                const auto was = NamMetadata::read (copy);
+
+                auto edited = was;
+                edited.make = "Mesa/Boogie";
+                edited.model = "Dual \"Rectifier\"";
+                edited.gearType = "pedal_amp";
+                edited.toneType = "";
+
+                const auto result = NamMetadata::write (copy, edited);
+                const auto now = NamMetadata::read (copy);
+                check (result.wasOk() && now.found && now.make == "Mesa/Boogie" && now.model == "Dual \"Rectifier\""
+                           && now.gearType == "pedal_amp" && now.toneType.isEmpty() && now.name == was.name,
+                       juce::String (name) + ": make, model, type and tone are written, the name is left alone");
+
+                // outside the metadata object nothing moved: the text before and after it is identical
+                int s1 = 0, e1 = 0, s2 = 0, e2 = 0;
+                const auto text = copy.loadFileAsString();
+                NamMetadata::findMetadataRange (original, s1, e1);
+                NamMetadata::findMetadataRange (text, s2, e2);
+                check (original.substring (0, s1) == text.substring (0, s2) && original.substring (e1) == text.substring (e2),
+                       juce::String (name) + ": the weights and the rest of the file are untouched");
+
+                // writing the same values again changes nothing, not even the file
+                const auto stamp = copy.getLastModificationTime();
+                juce::Thread::sleep (30);
+                check (NamMetadata::write (copy, now).wasOk() && copy.getLastModificationTime() == stamp,
+                       juce::String (name) + ": unchanged values do not rewrite the file");
+            }
+
+            // a file with no metadata gets an object; a key that is missing is added
+            {
+                const auto bare = scratch.getChildFile ("bare.nam");
+                bare.replaceWithText (R"({"version":"0.5.4","weights":[0.1,0.2],"sample_rate":48000})");
+                NamMetadata::Info info;
+                info.make = "Fender";
+                info.gearType = "amp";
+                check (NamMetadata::write (bare, info).wasOk() && NamMetadata::read (bare).make == "Fender"
+                           && NamMetadata::read (bare).gearType == "amp"
+                           && bare.loadFileAsString().contains ("\"sample_rate\":48000"),
+                       "a model without metadata gets a metadata object");
+
+                const auto partial = scratch.getChildFile ("partial.nam");
+                partial.replaceWithText (R"({"metadata":{"name":"x","loudness":-14.5},"weights":[1]})");
+                info.model = "Twin";
+                check (NamMetadata::write (partial, info).wasOk() && NamMetadata::read (partial).model == "Twin"
+                           && partial.loadFileAsString().contains ("\"loudness\":-14.5"),
+                       "missing keys are added to the metadata, the other keys stay");
+
+                check (NamMetadata::write (scratch.getChildFile ("missing.nam"), info).failed(), "a missing file is an error");
+            }
+
+            scratch.deleteRecursively();
+        }
+
         // gear type -> library section
         using Kind = FileLibrary::Kind;
         auto kindOf = [] (const char* gear, Kind fallback)

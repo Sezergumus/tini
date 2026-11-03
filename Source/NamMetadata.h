@@ -52,8 +52,9 @@ namespace NamMetadata
         bool operator!= (const Info& other) const { return ! (*this == other); }
     };
 
-    /** The text of the first "metadata" object in `text` (braces matched, strings respected); empty if none. */
-    inline juce::String findMetadataObject (const juce::String& text)
+    /** Where the first "metadata" object sits in `text`: [start, end) covers "{ ... }" (braces matched,
+        strings respected). False if there is none (or it is cut off). */
+    inline bool findMetadataRange (const juce::String& text, int& start, int& end)
     {
         int from = 0;
 
@@ -61,7 +62,7 @@ namespace NamMetadata
         {
             const int key = text.indexOf (from, "\"metadata\"");
             if (key < 0)
-                return {};
+                return false;
 
             int pos = key + 10;
             while (pos < text.length() && juce::CharacterFunctions::isWhitespace (text[pos]))
@@ -100,11 +101,22 @@ namespace NamMetadata
                 if (c == '"')       inString = true;
                 else if (c == '{')  ++depth;
                 else if (c == '}' && --depth == 0)
-                    return text.substring (pos, i + 1);
+                {
+                    start = pos;
+                    end = i + 1;
+                    return true;
+                }
             }
 
-            return {};   // cut off
+            return false;   // cut off
         }
+    }
+
+    /** The text of the first "metadata" object in `text`; empty if none. */
+    inline juce::String findMetadataObject (const juce::String& text)
+    {
+        int start = 0, end = 0;
+        return findMetadataRange (text, start, end) ? text.substring (start, end) : juce::String();
     }
 
     /** Reads the metadata of already loaded file text. */
@@ -152,6 +164,205 @@ namespace NamMetadata
         }
 
         return info;
+    }
+
+    //==========================================================================
+    // Editing. Only the text of the "metadata" object is touched: the weights and every other key of the
+    // file stay byte for byte as they were.
+
+    /** The gear types and tone types a capture usually carries (value in the file, label shown). */
+    struct Choice { const char* value; const char* label; };
+
+    inline constexpr Choice gearTypes[] = { { "amp", "Amp" }, { "preamp", "Pre-amp" }, { "pedal", "Pedal" },
+                                            { "pedal_amp", "Pedal + amp" }, { "amp_cab", "Amp + cab" },
+                                            { "amp_pedal_cab", "Amp + pedal + cab" }, { "studio", "Studio" } };
+
+    inline constexpr Choice toneTypes[] = { { "clean", "Clean" }, { "overdrive", "Overdrive" }, { "crunch", "Crunch" },
+                                            { "hi_gain", "Hi gain" }, { "fx", "FX" } };
+
+    namespace detail
+    {
+        /** End of the JSON value that starts at `pos` in `text` (a string, an object / array or a bare token). */
+        inline int valueEnd (const juce::String& text, int pos)
+        {
+            const int n = text.length();
+            if (pos >= n)
+                return n;
+
+            if (text[pos] == '"' || text[pos] == '{' || text[pos] == '[')
+            {
+                int depth = 0;
+                bool inString = false;
+
+                for (int i = pos; i < n; ++i)
+                {
+                    const auto c = text[i];
+
+                    if (inString)
+                    {
+                        if (c == '\\')      ++i;
+                        else if (c == '"')  { inString = false; if (depth == 0) return i + 1; }
+                        continue;
+                    }
+
+                    if (c == '"')                    inString = true;
+                    else if (c == '{' || c == '[')   ++depth;
+                    else if ((c == '}' || c == ']') && --depth == 0)
+                        return i + 1;
+                }
+
+                return n;
+            }
+
+            int i = pos;
+            while (i < n && text[i] != ',' && text[i] != '}' && text[i] != ']' && ! juce::CharacterFunctions::isWhitespace (text[i]))
+                ++i;
+            return i;
+        }
+
+        /** Sets `key` of the object `object` ("{ ... }") to `token` (a JSON value): the old value is replaced,
+            or the key is added at the end. Everything else stays as it was. */
+        inline juce::String setMember (const juce::String& object, const juce::String& key, const juce::String& token)
+        {
+            const int n = object.length();
+            int depth = 0;
+            bool expectKey = false;
+
+            for (int i = 0; i < n; ++i)
+            {
+                const auto c = object[i];
+
+                if (c == '"')
+                {
+                    const int begin = i;
+                    for (++i; i < n && object[i] != '"'; ++i)
+                        if (object[i] == '\\')
+                            ++i;
+
+                    if (depth == 1 && expectKey)
+                    {
+                        expectKey = false;
+
+                        if (object.substring (begin + 1, i) == key)
+                        {
+                            int pos = i + 1;
+                            while (pos < n && juce::CharacterFunctions::isWhitespace (object[pos]))
+                                ++pos;
+
+                            if (pos < n && object[pos] == ':')
+                            {
+                                ++pos;
+                                while (pos < n && juce::CharacterFunctions::isWhitespace (object[pos]))
+                                    ++pos;
+
+                                return object.substring (0, pos) + token + object.substring (valueEnd (object, pos));
+                            }
+                        }
+                    }
+                }
+                else if (c == '{' || c == '[')
+                {
+                    ++depth;
+                    if (c == '{' && depth == 1)
+                        expectKey = true;
+                }
+                else if (c == '}' || c == ']')
+                {
+                    --depth;
+                }
+                else if (c == ',' && depth == 1)
+                {
+                    expectKey = true;
+                }
+            }
+
+            // not there: add it before the closing brace
+            int close = object.lastIndexOfChar ('}');
+            if (close < 0)
+                return object;
+
+            int last = close;
+            while (last > 0 && juce::CharacterFunctions::isWhitespace (object[last - 1]))
+                --last;
+
+            const bool empty = object[last - 1] == '{';
+            return object.substring (0, last) + (empty ? "" : ", ") + "\"" + key + "\": " + token + object.substring (last);
+        }
+
+        inline juce::String tokenFor (const juce::String& value)
+        {
+            const auto v = value.trim();
+            return v.isEmpty() ? juce::String ("null") : juce::JSON::toString (juce::var (v), true);
+        }
+    }
+
+    /** Writes the make, model, gear type and tone type of `info` into the metadata of the .nam file `file`
+        (the keys that differ from what the file says now; "name" is not touched). An empty value becomes null.
+        The file is replaced in one step, so an error leaves it as it was. */
+    inline juce::Result write (const juce::File& file, const Info& info)
+    {
+        auto text = file.loadFileAsString();
+        if (text.isEmpty())
+            return juce::Result::fail ("The file could not be read.");
+
+        const auto before = parse (text);
+        struct Edit { const char* key; const juce::String* was; const juce::String* now; };
+        const Edit edits[] = { { "gear_make", &before.make, &info.make },
+                               { "gear_model", &before.model, &info.model },
+                               { "gear_type", &before.gearType, &info.gearType },
+                               { "tone_type", &before.toneType, &info.toneType } };
+
+        int start = 0, end = 0;
+        const bool hasObject = findMetadataRange (text, start, end);
+        juce::String object = hasObject ? text.substring (start, end) : juce::String ("{}");
+        bool changed = false;
+
+        for (const auto& edit : edits)
+        {
+            if (edit.was->trim() == edit.now->trim() && hasObject)
+                continue;
+
+            if (edit.now->trim().isEmpty() && edit.was->isEmpty())
+                continue;
+
+            object = detail::setMember (object, edit.key, detail::tokenFor (*edit.now));
+            changed = true;
+        }
+
+        if (! changed)
+            return juce::Result::ok();
+
+        juce::String result;
+
+        if (hasObject)
+        {
+            result = text.substring (0, start) + object + text.substring (end);
+        }
+        else
+        {
+            // no metadata yet: add the object as the last member of the top-level object
+            const int close = text.lastIndexOfChar ('}');
+            if (close < 0)
+                return juce::Result::fail ("This is not a model file.");
+
+            int last = close;
+            while (last > 0 && juce::CharacterFunctions::isWhitespace (text[last - 1]))
+                --last;
+
+            result = text.substring (0, last) + (text[last - 1] == '{' ? "" : ", ") + "\"metadata\": " + object + text.substring (last);
+        }
+
+        // never write something that does not parse back to what was asked for
+        const auto check = parse (result);
+        if (! check.found || check.make.trim() != info.make.trim() || check.model.trim() != info.model.trim()
+            || check.gearType != info.gearType.trim().toLowerCase() || check.toneType != info.toneType.trim().toLowerCase())
+            return juce::Result::fail ("The metadata could not be changed in this file.");
+
+        juce::TemporaryFile temp (file);
+        if (! temp.getFile().replaceWithText (result, false, false) || ! temp.overwriteTargetFileWithTemporary())
+            return juce::Result::fail ("The file could not be written (is it read-only?).");
+
+        return juce::Result::ok();
     }
 
     /** Which kind of file a gear type is (see FileLibrary::Kind): amps and pre-amps are amps, pedals are

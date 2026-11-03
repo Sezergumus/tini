@@ -66,7 +66,7 @@ private:
 //==============================================================================
 /** The Library: everything in Documents/tini in four sections (Amps, Pedals, Cabs, Other models).
 
-    Left, the sections with their file counts. Right, a search field with Add files and Open folder, the
+    Left, Add files above the sections with their file counts. Right, a search field with Open folder, the
     files of the open section (name and what the file says about itself, a dot on the ones in use) and
     under them the actions for the selected file:
 
@@ -74,7 +74,7 @@ private:
         Pedals    Add to chain       (a NAM pedal named after the model)
         Cabs      Load to cab
         Other     Load to amp, Add to chain
-        all       Rename, Show in file manager, Delete
+        all       Edit (name, make, model, type, tone; a cab is only renamed), Show in file manager, Delete
 
     The page does not know what "load" means for the rest of the app: MainView hands it the callbacks. */
 class LibraryPage : public juce::Component, private juce::Timer
@@ -97,6 +97,7 @@ public:
         list.isLoaded = [this] (const juce::File& file) { return isInUse (file); };
         list.onRenamed = [this] (const juce::File& oldFile, const juce::File& newFile) { fileRenamed (oldFile, newFile); };
         list.onDeleted = [this] (const juce::File&) { updateActions(); countFiles(); };
+        list.onEdited = [this] (const juce::File&) { updateActions(); repaint(); };
         list.onAdded = [this] (const juce::Array<juce::File>&) { countFiles(); };
         addAndMakeVisible (list);
         addAndMakeVisible (filterBar);
@@ -117,8 +118,9 @@ public:
         primaryButton.onClick = [this] { if (list.getSelectedFile() != juce::File()) runPrimary (list.getSelectedFile()); };
         secondaryButton.setButtonText ("Add to chain");
         secondaryButton.onClick = [this] { if (list.getSelectedFile() != juce::File() && onAddToChain) onAddToChain (list.getSelectedFile()); };
-        renameButton.setButtonText ("Rename");
-        renameButton.onClick = [this] { if (list.getSelectedFile() != juce::File()) list.askRename (list.getSelectedFile()); };
+        renameButton.setButtonText ("Edit");
+        renameButton.setTooltip ("Change the name and what the file says about itself");
+        renameButton.onClick = [this] { if (list.getSelectedFile() != juce::File()) list.askEdit (list.getSelectedFile()); };
         revealButton.setButtonText ("Show");
         revealButton.setTooltip ("Show the file in the file manager");
         revealButton.onClick = [this] { if (list.getSelectedFile() != juce::File()) list.getSelectedFile().revealToUser(); };
@@ -251,7 +253,7 @@ public:
         auto b = getLocalBounds().reduced (padding);
 
         auto column = b.removeFromLeft (columnWidth);
-        column.removeFromTop (headerHeight);
+        addButton.setBounds (column.removeFromTop (headerHeight).withSizeKeepingCentre (columnWidth, 30));   // level with the title on the right
         for (auto* s : sections)
         {
             s->setBounds (column.removeFromTop (SectionButton::height));
@@ -261,8 +263,6 @@ public:
         auto right = rightArea();
         auto head = right.removeFromTop (headerHeight);
         folderButton.setBounds (head.removeFromRight (88).withSizeKeepingCentre (88, 28));
-        head.removeFromRight (6);
-        addButton.setBounds (head.removeFromRight (74).withSizeKeepingCentre (74, 28));
         head.removeFromRight (12);
         searchBox.setBounds (head.removeFromRight (juce::jmin (260, head.getWidth() - 200)).withSizeKeepingCentre (juce::jmin (260, head.getWidth() - 200), 30));
 
@@ -352,6 +352,7 @@ private:
         const bool hasFile = list.getSelectedFile() != juce::File();
 
         primaryButton.setButtonText (primaryLabel (section));
+        renameButton.setButtonText (section == Kind::cabs ? "Rename" : "Edit");
         secondaryButton.setVisible (section == Kind::other);
 
         for (auto* b : { &primaryButton, &secondaryButton, &renameButton, &revealButton, &deleteButton })

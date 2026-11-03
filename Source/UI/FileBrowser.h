@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../LibraryPaths.h"
+#include "Dialog.h"
 #include "Theme.h"
 
 //==============================================================================
@@ -67,45 +68,29 @@ namespace FileLibrary
     the pedal picker) shares one wording and one behaviour. */
 namespace FileActions
 {
-    /** Asks for a new name (the extension stays) and calls `rename` with it. An error it returns is shown. */
+    /** Asks for a new name (the extension stays) and calls `rename` with it. An error it returns is shown
+        inside the dialog, which stays open. */
     inline void askRename (juce::Component* owner, const juce::File& file,
                            std::function<juce::Result (const juce::String&)> rename)
     {
-        auto* window = new juce::AlertWindow ("Rename", "New name for " + file.getFileName(), juce::MessageBoxIconType::NoIcon, owner);
-        window->addTextEditor ("name", file.getFileNameWithoutExtension());
-        window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
-        window->enterModalState (true, juce::ModalCallbackFunction::create (
-            [rename = std::move (rename), window] (int result)
-            {
-                if (result != 1)
-                    return;
-
-                const auto outcome = rename (window->getTextEditorContents ("name"));
-                if (outcome.failed())
-                    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
-                                                      .withTitle ("Could not rename").withMessage (outcome.getErrorMessage())
-                                                      .withButton ("OK"), nullptr);
-            }), true);
+        auto dialog = std::make_unique<FormDialog> ("Rename", file.getFileName(), "Rename");
+        dialog->addText ("name", "Name", file.getFileNameWithoutExtension());
+        dialog->onSubmit = [rename = std::move (rename)] (FormDialog& d) { return rename (d.getText ("name")); };
+        FormDialog::show (std::move (dialog), owner);
     }
 
     /** Asks before moving a file to the Recycle Bin, then calls `remove`; false from it is shown as an error. */
-    inline void askDelete (const juce::File& file, std::function<bool()> remove)
+    inline void askDelete (juce::Component* owner, const juce::File& file, std::function<bool()> remove)
     {
         const auto where = FileLibrary::useTrash() ? juce::String ("the Recycle Bin") : juce::String ("nowhere");
 
-        juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
-                                          .withTitle ("Delete")
-                                          .withMessage ("Move " + file.getFileName() + " to " + where + "?")
-                                          .withButton ("Delete").withButton ("Cancel"),
-                                      [file, remove = std::move (remove)] (int result)
+        auto dialog = std::make_unique<FormDialog> ("Delete", "Move " + file.getFileName() + " to " + where + "?", "Delete",
+                                                    DialogButton::Style::danger);
+        dialog->onSubmit = [file, remove = std::move (remove)] (FormDialog&)
         {
-            if (result == 1 && ! remove())
-                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
-                                                  .withTitle ("Could not delete").withMessage (file.getFileName() + " is in use or protected.")
-                                                  .withButton ("OK"), nullptr);
-        });
+            return remove() ? juce::Result::ok() : juce::Result::fail (file.getFileName() + " is in use or protected.");
+        };
+        FormDialog::show (std::move (dialog), owner);
     }
 
     /** Copies `sources` that fit `kind` into the library folder of `kind`; returns how many arrived. */
@@ -453,7 +438,7 @@ private:
 
     void askDelete (const juce::File& file)
     {
-        FileActions::askDelete (file, [safe = juce::Component::SafePointer<FileBrowserList> (this), file]
+        FileActions::askDelete (this, file, [safe = juce::Component::SafePointer<FileBrowserList> (this), file]
         {
             return safe == nullptr || safe->deleteFile (file);
         });

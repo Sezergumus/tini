@@ -1406,6 +1406,62 @@ void renderUiSnapshots (const juce::File& dir)
                             && p.pedalNam[0].getFile() == pedalsFolder.getChildFile ("Green Drive MkII.nam"),
                         "renaming a model that a NAM pedal uses keeps the pedal on it");
 
+                // Edit: a dialog in the look of the app changes the name and what the file says about itself
+                {
+                    list.selectFile (pedalsFolder.getChildFile ("Fuzz Face.nam"));
+                    settleLoop (100);
+                    report (libPage.getRenameButton().getButtonText() == "Edit" && libPage.getRenameButton().isEnabled(),
+                            "a model can be edited (the button reads Edit)");
+
+                    libPage.getRenameButton().triggerClick();
+                    settleLoop (100);
+                    auto* dialog = findFirst<FormDialog> (*editor);
+                    report (dialog != nullptr && dialog->isVisible() && dialog->getEditor ("make") != nullptr
+                                && dialog->getChips ("type") != nullptr && dialog->getChips ("type")->getValue() == "pedal",
+                            "Edit opens a dialog inside the app with the name, make, model, type and tone");
+
+                    if (dialog != nullptr)
+                    {
+                        save (*editor, dir.getChildFile ("ui_edit_dialog.png"));
+
+                        // a name in use is refused inside the dialog, which stays open
+                        dialog->getEditor ("name")->setText ("Green Drive MkII", false);
+                        dialog->getOkButton().triggerClick();
+                        settleLoop (100);
+                        report (findFirst<FormDialog> (*editor) == dialog && dialog->getError().isNotEmpty(),
+                                "a name that is taken shows an error and keeps the dialog open");
+                        save (*editor, dir.getChildFile ("ui_edit_dialog_error.png"));
+
+                        dialog->getEditor ("name")->setText ("Fuzz Face MkII", false);
+                        dialog->getEditor ("make")->setText ("Dunlop", false);
+                        dialog->getEditor ("model")->setText ("Fuzz Face", false);
+                        dialog->getChips ("tone")->pick (3);   // hi gain
+                        dialog->getOkButton().triggerClick();
+                        settleLoop (400);
+
+                        const auto edited = NamMetadata::read (pedalsFolder.getChildFile ("Fuzz Face MkII.nam"));
+                        report (findFirst<FormDialog> (*editor) == nullptr, "saving closes the dialog");
+                        report (! pedalsFolder.getChildFile ("Fuzz Face.nam").exists() && edited.found && edited.make == "Dunlop"
+                                    && edited.model == "Fuzz Face" && edited.toneType == "hi_gain" && edited.gearType == "pedal",
+                                "...renames the file and writes make, model and tone into its metadata");
+                        report (list.getNumFiles() == 2 && list.getFile (0).getFileName() == "Fuzz Face MkII.nam"
+                                    && list.detailOf (list.getFile (0)).contains ("Dunlop"),
+                                "...and the list shows the new name and details: " + list.detailOf (list.getFile (0)));
+                    }
+
+                    // Escape cancels, a confirmation dialog deletes only when confirmed
+                    libPage.getDeleteButton().triggerClick();
+                    settleLoop (100);
+                    dialog = findFirst<FormDialog> (*editor);
+                    report (dialog != nullptr, "Delete asks first, in a dialog of the app");
+                    if (dialog != nullptr)
+                    {
+                        dialog->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+                        settleLoop (100);
+                        report (findFirst<FormDialog> (*editor) == nullptr && list.getNumFiles() == 2, "Escape cancels and nothing is deleted");
+                    }
+                }
+
                 const auto dropped = outside.getChildFile ("Fresh Fuzz.nam");
                 dropped.replaceWithText (withGear ("pedal"));
                 report (list.isInterestedInFileDrag ({ dropped.getFullPathName() }) && ! list.isInterestedInFileDrag ({ cabsFolder.getChildFile ("Cab 4x12.wav").getFullPathName() }),

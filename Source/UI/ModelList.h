@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../PluginProcessor.h"
+#include "Dialog.h"
 #include "FileBrowser.h"
 #include "LibraryFilter.h"
 
@@ -55,6 +56,9 @@ public:
 
     std::function<void (const juce::File& oldFile, const juce::File& newFile)> onRenamed;
     std::function<void (const juce::File&)> onDeleted;
+
+    /** Called after what a model says about itself was changed (Edit); the file may have been renamed too. */
+    std::function<void (const juce::File&)> onEdited;
 
     /** Called after files were copied in (with the files in the library); a drop or Add files. */
     std::function<void (const juce::Array<juce::File>&)> onAdded;
@@ -300,7 +304,7 @@ public:
             menu.addItem (1, primaryLabel);
             menu.addSeparator();
         }
-        menu.addItem (2, "Rename...");
+        menu.addItem (2, kind == FileLibrary::Kind::cabs ? "Rename..." : "Edit info...");
         menu.addItem (3, "Show in file manager");
         menu.addItem (4, "Delete...");
 
@@ -313,12 +317,92 @@ public:
             switch (choice)
             {
                 case 1: safe->pick (file); break;
-                case 2: safe->askRename (file); break;
+                case 2: safe->askEdit (file); break;
                 case 3: file.revealToUser(); break;
                 case 4: safe->askDelete (file); break;
                 default: break;
             }
         });
+    }
+
+    /** Models: a dialog for the name and for what the file says about itself (make, model, type, tone).
+        Impulse responses have nothing to say about themselves: they only get renamed. */
+    void askEdit (const juce::File& file)
+    {
+        if (kind == FileLibrary::Kind::cabs)
+        {
+            askRename (file);
+            return;
+        }
+
+        const auto info = processor.metadata.getNow (file);
+
+        auto dialog = std::make_unique<FormDialog> ("Edit info", file.getFileName(), "Save");
+        dialog->addText ("name", "Name", file.getFileNameWithoutExtension());
+        dialog->addText ("make", "Make", info.make, "e.g. Mesa/Boogie");
+        dialog->addText ("model", "Model", info.model, "e.g. Dual Rectifier");
+
+        std::vector<ChipRow::Choice> types, tones;
+        for (const auto& c : NamMetadata::gearTypes) types.push_back ({ c.value, c.label });
+        for (const auto& c : NamMetadata::toneTypes) tones.push_back ({ c.value, c.label });
+
+        dialog->addChoices ("type", "Type", std::move (types), info.gearType);
+        dialog->addChoices ("tone", "Tone", std::move (tones), info.toneType);
+
+        // the file can be renamed even when the metadata then fails: the dialog follows it
+        auto current = std::make_shared<juce::File> (file);
+
+        dialog->onSubmit = [safe = juce::Component::SafePointer<ModelList> (this), current] (FormDialog& d)
+        {
+            return safe != nullptr ? safe->saveEdit (*current, d.getText ("name"), d.getText ("make"), d.getText ("model"),
+                                                      d.getChoice ("type"), d.getChoice ("tone"))
+                                   : juce::Result::ok();
+        };
+
+        FormDialog::show (std::move (dialog), this);
+    }
+
+    /** Renames the file and writes the make, model, type and tone into its metadata. */
+    juce::Result saveEdit (juce::File& file, const juce::String& newName, const juce::String& make,
+                           const juce::String& model, const juce::String& gearType, const juce::String& toneType)
+    {
+        juce::File target = file;
+
+        // the name first: a name that is refused changes nothing
+        if (newName.trim() != file.getFileNameWithoutExtension())
+        {
+            const auto renamed = FileLibrary::renameFile (file, newName, target);
+            if (renamed.failed())
+                return renamed;
+        }
+
+        NamMetadata::Info info;
+        info.make = make;
+        info.model = model;
+        info.gearType = gearType;
+        info.toneType = toneType;
+
+        // the file is only rewritten if the metadata changed (which also changes its time stamp)
+        const auto written = NamMetadata::write (target, info);
+        const auto before = file;
+        file = target;
+
+        if (target != before)
+        {
+            if (selected == before)
+                selected = target;
+
+            if (onRenamed)
+                onRenamed (before, target);
+        }
+
+        processor.metadata.getNow (target);   // read it again now: the lists and the details show it at once
+        rescan();
+
+        if (onEdited)
+            onEdited (target);
+
+        return written;
     }
 
     void askRename (const juce::File& file)
@@ -331,7 +415,7 @@ public:
 
     void askDelete (const juce::File& file)
     {
-        FileActions::askDelete (file, [safe = juce::Component::SafePointer<ModelList> (this), file]
+        FileActions::askDelete (this, file, [safe = juce::Component::SafePointer<ModelList> (this), file]
         {
             return safe == nullptr || safe->deleteFile (file);
         });

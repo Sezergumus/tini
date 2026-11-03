@@ -29,7 +29,8 @@ public:
         setColour (juce::ComboBox::arrowColourId,          Theme::textMid);
         setColour (juce::ComboBox::focusedOutlineColourId, Theme::accent);
 
-        setColour (juce::PopupMenu::backgroundColourId,            Theme::surface);
+        // not quite opaque on purpose: the menu window then has transparent corners (see drawPopupMenuBackground)
+        setColour (juce::PopupMenu::backgroundColourId,            Theme::surfaceHi.withAlpha ((juce::uint8) 254));
         setColour (juce::PopupMenu::textColourId,                  Theme::textHi);
         setColour (juce::PopupMenu::headerTextColourId,            Theme::textLo);
         setColour (juce::PopupMenu::highlightedBackgroundColourId, Theme::accent.withAlpha (0.20f));
@@ -75,6 +76,81 @@ public:
                                                 : juce::TextEditor::outlineColourId));
         g.drawRoundedRectangle (juce::Rectangle<float> ((float) width, (float) height).reduced (thickness * 0.5f),
                                 editorRadius, thickness);
+    }
+
+    //==========================================================================
+    // Popup menus (sort order, the right click menu of a file): a rounded card with a soft highlight and
+    // an accent tick. The window is not opaque (see the background colour), so the corners stay clear.
+    int getPopupMenuBorderSize() override { return 6; }
+
+    void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
+    {
+        auto r = juce::Rectangle<float> ((float) width, (float) height).reduced (0.5f);
+        g.setColour (Theme::surfaceHi);
+        g.fillRoundedRectangle (r, 10.0f);
+        g.setColour (Theme::panelBorder.brighter (0.2f));
+        g.drawRoundedRectangle (r, 10.0f, 1.0f);
+    }
+
+    void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int, int& idealWidth, int& idealHeight) override
+    {
+        if (isSeparator)
+        {
+            idealWidth = 50;
+            idealHeight = 9;
+            return;
+        }
+
+        idealWidth = (int) std::ceil (Theme::ui (13.0f).getStringWidthFloat (text)) + 14 + 34;
+        idealHeight = 30;
+    }
+
+    void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area, bool isSeparator, bool isActive,
+                            bool isHighlighted, bool isTicked, bool hasSubMenu, const juce::String& text,
+                            const juce::String&, const juce::Drawable*, const juce::Colour* textColour) override
+    {
+        if (isSeparator)
+        {
+            g.setColour (Theme::divider);
+            g.fillRect (area.reduced (10, 0).withSizeKeepingCentre (area.getWidth() - 20, 1));
+            return;
+        }
+
+        auto r = area.reduced (2, 1);
+
+        if (isHighlighted && isActive)
+        {
+            g.setColour (Theme::accent.withAlpha (0.16f));
+            g.fillRoundedRectangle (r.toFloat(), 6.0f);
+        }
+
+        g.setColour (! isActive ? Theme::textLo
+                                : textColour != nullptr ? *textColour
+                                : isHighlighted ? Theme::textHi : Theme::textMid.brighter (0.25f));
+        g.setFont (Theme::ui (13.0f, isTicked));
+        g.drawText (text, r.withTrimmedLeft (12).withTrimmedRight (30), juce::Justification::centredLeft, true);
+
+        if (isTicked)
+        {
+            const auto c = juce::Point<float> ((float) r.getRight() - 16.0f, (float) r.getCentreY());
+            juce::Path check;
+            check.startNewSubPath (c.x - 4.0f, c.y);
+            check.lineTo (c.x - 1.5f, c.y + 3.0f);
+            check.lineTo (c.x + 4.0f, c.y - 3.0f);
+            g.setColour (Theme::accent);
+            g.strokePath (check, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+
+        if (hasSubMenu)
+        {
+            const auto c = juce::Point<float> ((float) r.getRight() - 14.0f, (float) r.getCentreY());
+            juce::Path arrow;
+            arrow.startNewSubPath (c.x - 1.5f, c.y - 3.5f);
+            arrow.lineTo (c.x + 2.0f, c.y);
+            arrow.lineTo (c.x - 1.5f, c.y + 3.5f);
+            g.setColour (Theme::textMid);
+            g.strokePath (arrow, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
     }
 
     //==========================================================================
