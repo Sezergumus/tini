@@ -7,6 +7,8 @@ Built with [JUCE](https://juce.com) as a **standalone app** and a **VST3 plugin*
 
 - Amp model and a convolution cabinet simulator (load your own IR)
 - Pedal board: noise gate, compressor, boost, overdrive, chorus, delay, reverb
+- Neural Amp Modeler (`.nam`) support: models for the amp slot and NAM pedals, each pedal named after its model
+- Library page: your amp models, pedal captures, cabinet IRs and other models in one place (`Documents/tini`), sorted by what the files say about themselves; drop files onto the window to add them
 - Drag pedals and the amp to reorder the signal chain
 - Preset manager (save, load, delete)
 - Standalone shows the real device round-trip latency (`≈ xx ms`) next to the driver name

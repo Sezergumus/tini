@@ -356,7 +356,7 @@ void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<floa
         break;
     }
 
-    case 7: // Capture: a Neural Amp Modeler model of a pedal (passes the signal through without one)
+    case 7: // NAM pedal: a Neural Amp Modeler model of a pedal (passes the signal through without one)
     {
         const float mix = params.value(2) / 100.0f;
         const bool blend = mix < 0.999f;

@@ -9,7 +9,7 @@
 
 //==============================================================================
 /** What a ModelSlot works on: a NAM engine of the processor and how to load / clear it. The amp slot
-    and every Capture pedal copy have one. */
+    and every NAM pedal copy have one. */
 struct ModelTarget
 {
     NamEngine& engine;

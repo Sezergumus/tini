@@ -235,7 +235,7 @@ void renderUiSnapshots (const juce::File& dir)
         };
         auto* ampNode = &strip.getAmpTile();
 
-        // the Capture pedal is not in the chain at first: it is parked right before the amp
+        // the NAM pedal is not in the chain at first: it is parked right before the amp
         constexpr int gate = 0, comp = 1, boost = 2, od = 3, chorus = 4, delay = 5, reverb = 6, capture = 7, amp = PedalCatalog::ampItem;
         auto order = [&] { return p.getChainOrder(); };
         auto sameAs = [&] (std::initializer_list<int> expected)
@@ -1068,7 +1068,7 @@ void renderUiSnapshots (const juce::File& dir)
             settle();
         }
 
-        // Capture pedal: its page has a model slot and the list of the Pedals folder
+        // NAM pedal: its page has a model slot and the list of the Pedals folder
         {
             FileLibrary::rootOverride().deleteRecursively();
             FileLibrary::ensureFolders();
