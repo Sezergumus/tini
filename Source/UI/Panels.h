@@ -14,8 +14,10 @@ constexpr int cabBlock = PedalCatalog::numItems;
     the category for a pedal. */
 inline juce::Colour blockColour (int block)
 {
-    if (block == PedalCatalog::ampItem || block == cabBlock)
-        return Theme::accent;
+    if (block == PedalCatalog::ampItem)
+        return Theme::ampColour;
+    if (block == cabBlock)
+        return Theme::cabColour;
 
     return Theme::categoryColour (PedalCatalog::pedalOf (block).category);
 }
@@ -78,6 +80,9 @@ public:
 
     void setTint (juce::Colour c) { tint = c; }
 
+    /** The tile behind is filled with the colour (selected): the dot is drawn in white then. */
+    void setOnColour (bool filled) { if (onColour != filled) { onColour = filled; repaint(); } }
+
     /** Pedals toggle through their attachment; the amp and the cab do not react to clicks. */
     void setSwitchable (bool canSwitch)
     {
@@ -88,29 +93,34 @@ public:
 
     void paintButton (juce::Graphics& g, bool highlighted, bool) override
     {
-        const auto dotArea = juce::Rectangle<float> (10.0f, 10.0f).withCentre (getLocalBounds().toFloat().getCentre());
+        const auto dotArea = juce::Rectangle<float> (11.0f, 11.0f).withCentre (getLocalBounds().toFloat().getCentre());
         const bool on = getToggleState();
+        const auto colour = onColour ? juce::Colours::white : tint;
 
         if (highlighted && getClickingTogglesState())
         {
-            g.setColour (juce::Colours::white.withAlpha (0.08f));
+            g.setColour (juce::Colours::white.withAlpha (onColour ? 0.18f : 0.08f));
             g.fillEllipse (dotArea.expanded (6.0f));
         }
 
         if (on)
         {
-            g.setColour (tint);
-            g.fillEllipse (dotArea);
+            juce::Path dot;
+            dot.addEllipse (dotArea);
+            juce::DropShadow (colour.withAlpha (0.7f), 8, {}).drawForPath (g, dot);   // a lit LED
+            g.setColour (colour);
+            g.fillPath (dot);
         }
         else
         {
-            g.setColour (Theme::textLo);
+            g.setColour (onColour ? juce::Colours::white.withAlpha (0.6f) : Theme::textLo);
             g.drawEllipse (dotArea.reduced (0.75f), 1.5f);
         }
     }
 
 private:
     juce::Colour tint = Theme::accent;
+    bool onColour = false;
 };
 
 //==============================================================================
@@ -170,6 +180,7 @@ public:
         if (selected == shouldBeSelected)
             return;
         selected = shouldBeSelected;
+        dot.setOnColour (selected);
         repaint();
     }
 
@@ -223,24 +234,43 @@ public:
         auto r = getLocalBounds().toFloat();
         const bool on = isActive();
 
-        g.setColour (selected ? Theme::surfaceHi : hover ? Theme::surfaceHi.interpolatedWith (Theme::surface, 0.5f) : Theme::surface);
-        g.fillRoundedRectangle (r, 10.0f);
+        constexpr float radius = 16.0f;
+        juce::Path card;
+        card.addRoundedRectangle (r.reduced (1.0f), radius);
 
         if (selected)
         {
-            // underline in the colour of the block
-            g.setColour (tint);
-            g.fillRoundedRectangle (r.getX() + 16.0f, r.getBottom() - 4.0f, r.getWidth() - 32.0f, 2.0f, 1.0f);
+            // a widget filled with the block's colour (dimmed while the pedal is bypassed)
+            const auto c = on ? tint : tint.withMultipliedSaturation (0.35f).withMultipliedBrightness (0.55f);
+            g.setGradientFill (Theme::fillGradient (c, r));
+            g.fillPath (card);
+            g.setColour (juce::Colours::white.withAlpha (0.22f));
+            g.drawRoundedRectangle (r.reduced (1.5f), radius, 1.0f);
+        }
+        else
+        {
+            g.setColour (hover ? Theme::surfaceHi : Theme::surface);
+            g.fillPath (card);
+
+            // a faint wash of the block's colour from the top
+            g.setGradientFill (juce::ColourGradient (tint.withAlpha (on ? 0.11f : 0.04f), r.getX(), r.getY(),
+                                                     tint.withAlpha (0.0f), r.getX(), r.getBottom(), false));
+            g.fillPath (card);
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.drawRoundedRectangle (r.reduced (1.5f), radius, 1.0f);
         }
 
-        g.setColour (on ? Theme::textHi : Theme::textMid);
-        g.setFont (Theme::ui (14.0f, true));
+        const auto titleColour  = selected ? juce::Colours::white : on ? Theme::textHi : Theme::textMid;
+        const auto detailColour = selected ? juce::Colours::white.withAlpha (0.82f) : on ? Theme::textMid : Theme::textLo;
+
+        g.setColour (titleColour);
+        g.setFont (Theme::ui (15.0f, true, -0.01f));
         g.drawText (title, juce::Rectangle<float> (r.getX() + 14.0f, r.getY() + 42.0f, r.getWidth() - 28.0f, 20.0f),
                     juce::Justification::centredLeft, true);
 
         if (detail.isNotEmpty())
         {
-            g.setColour (on ? Theme::textMid : Theme::textLo);
+            g.setColour (detailColour);
             g.setFont (Theme::ui (11.5f));
             g.drawText (detail, juce::Rectangle<float> (r.getX() + 14.0f, r.getY() + 64.0f, r.getWidth() - 28.0f, 16.0f),
                         juce::Justification::centredLeft, true);
@@ -672,10 +702,21 @@ public:
 
         const bool open = getToggleState();
 
-        g.setColour (down ? Theme::surfaceHi.brighter (0.1f) : (highlighted && usable) || open ? Theme::surfaceHi : Theme::surface);
-        g.fillEllipse (r);
+        juce::Path disc;
+        disc.addEllipse (r);
+        const bool lit = usable && (open || highlighted || down);
+        if (lit)
+        {
+            juce::DropShadow (Theme::accent.withAlpha (0.5f), 12, { 0, 2 }).drawForPath (g, disc);
+            g.setGradientFill (Theme::fillGradient (down ? Theme::accent.darker (0.2f) : Theme::accent, r));
+        }
+        else
+        {
+            g.setColour (Theme::surfaceHi);
+        }
+        g.fillPath (disc);
 
-        g.setColour (! usable ? Theme::textLo.withAlpha (0.5f) : highlighted || open ? Theme::accent : Theme::textMid);
+        g.setColour (! usable ? Theme::textLo.withAlpha (0.5f) : lit ? juce::Colours::white : Theme::accent);
         g.fillRoundedRectangle (r.withSizeKeepingCentre (14.0f, 2.0f), 1.0f);
         g.fillRoundedRectangle (r.withSizeKeepingCentre (2.0f, 14.0f), 1.0f);
     }
@@ -718,10 +759,14 @@ public:
             g.fillRoundedRectangle (r, 8.0f);
         }
 
-        g.setColour (tint.withAlpha (alpha));
-        g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ r.getX() + 16.0f, r.getCentreY() }));
+        // an iOS settings-style icon: a rounded square in the category colour
+        const auto icon = juce::Rectangle<float> (26.0f, 26.0f).withCentre ({ r.getX() + 21.0f, r.getCentreY() });
+        g.setGradientFill (Theme::fillGradient (tint.withMultipliedAlpha (alpha), icon));
+        g.fillRoundedRectangle (icon, 7.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.9f * alpha));
+        g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (icon.getCentre()));
 
-        const float textX = r.getX() + 32.0f;
+        const float textX = r.getX() + 44.0f;
         const float textW = r.getWidth() - textX - 90.0f;
 
         g.setColour (Theme::textHi.withAlpha (alpha));
@@ -836,8 +881,9 @@ public:
     {
         // the signal line runs behind everything, from the first block to the cab
         const float y = (float) getHeight() * 0.5f - 4.0f;
-        g.setColour (Theme::trackBg);
-        g.fillRect ((float) viewport.getX(), y - 0.75f, (float) (cabTile.getX() - viewport.getX()), 1.5f);
+        g.setGradientFill (juce::ColourGradient (Theme::purple.withAlpha (0.5f), (float) viewport.getX(), y,
+                                                 Theme::cabColour.withAlpha (0.5f), (float) cabTile.getX(), y, false));
+        g.fillRect ((float) viewport.getX(), y - 1.0f, (float) (cabTile.getX() - viewport.getX()), 2.0f);
     }
 
     ChainStrip& getStrip() { return strip; }

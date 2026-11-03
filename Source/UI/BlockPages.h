@@ -374,12 +374,12 @@ class AmpPage : public juce::Component
 public:
     explicit AmpPage (TiniAudioProcessor& p)
         : modelSlot (p), processor (p),
-          drive  ("Drive",  Theme::accent, 1),
-          namIn  ("Input",  Theme::accent, 1, " dB"),
-          low    ("Low",    Theme::accent, 1),
-          mid    ("Mid",    Theme::accent, 1),
-          high   ("High",   Theme::accent, 1),
-          master ("Master", Theme::accent, 1)
+          drive  ("Drive",  Theme::ampColour, 1),
+          namIn  ("Input",  Theme::ampColour, 1, " dB"),
+          low    ("Low",    Theme::ampColour, 1),
+          mid    ("Mid",    Theme::ampColour, 1),
+          high   ("High",   Theme::ampColour, 1),
+          master ("Master", Theme::ampColour, 1)
     {
         auto& apvts = processor.apvts;
 
@@ -458,8 +458,8 @@ public:
     void paint (juce::Graphics& g) override
     {
         // track of the segmented switch
-        g.setColour (Theme::inset);
-        g.fillRoundedRectangle (segmentArea.toFloat(), 8.0f);
+        g.setColour (juce::Colour (0x3d767680));   // tertiarySystemFill
+        g.fillRoundedRectangle (segmentArea.toFloat(), 9.0f);
 
         g.setColour (Theme::divider);
         for (auto x : dividerX)
@@ -653,15 +653,22 @@ public:
     {
         auto header = getLocalBounds().removeFromTop (headerHeight);
 
-        const auto titleFont = Theme::ui (20.0f, true);
+        const auto titleFont = Theme::ui (24.0f, true, -0.02f);
         const float titleW = titleFont.getStringWidthFloat (title);
         g.setColour (Theme::textHi);
         g.setFont (titleFont);
         g.drawText (title, header.removeFromLeft ((int) titleW + 4), juce::Justification::centredLeft, false);
 
-        g.setColour (Theme::textLo);
+        // the category as a chip in its colour
+        const auto chipFont = Theme::ui (11.5f, true);
+        const auto chip = juce::Rectangle<float> ((float) header.getX() + 12.0f, (float) header.getCentreY() - 11.0f,
+                                                  chipFont.getStringWidthFloat (category) + 20.0f, 22.0f);
+        g.setColour (tint.withAlpha (0.22f));
+        g.fillRoundedRectangle (chip, 11.0f);
+        g.setColour (Theme::light (tint));
+        g.setFont (chipFont);
+        g.drawText (category, chip, juce::Justification::centred, false);
         g.setFont (Theme::ui (13.0f));
-        g.drawText (category, header.withTrimmedLeft (12), juce::Justification::centredLeft, false);
 
         g.setColour (bypass.getToggleState() ? Theme::textMid : Theme::textLo);
         g.drawText (bypass.getToggleState() ? "On" : "Bypassed",
@@ -724,8 +731,8 @@ class CabPage : public juce::Component
 public:
     explicit CabPage (TiniAudioProcessor& p)
         : irSlot (p), processor (p),
-          lowCut  ("Low cut",  Theme::accent, 0, " Hz"),
-          highCut ("High cut", Theme::accent, 1, " kHz")
+          lowCut  ("Low cut",  Theme::cabColour, 0, " Hz"),
+          highCut ("High cut", Theme::cabColour, 1, " kHz")
     {
         lowCut.attach  (p.apvts, "CAB_LOWCUT");
         highCut.attach (p.apvts, "CAB_HIGHCUT");
@@ -887,7 +894,15 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        Theme::drawPanel (g, getLocalBounds().toFloat());
+        // the page takes the colour of its block; the pedal picker the accent, the tuner green
+        if (overlay == nullptr)
+            Theme::drawTintedPanel (g, getLocalBounds().toFloat(), blockColour (shown));
+        else if (overlayKind == Overlay::addPedal)
+            Theme::drawTintedPanel (g, getLocalBounds().toFloat(), Theme::accent);
+        else if (overlayKind == Overlay::tuner)
+            Theme::drawTintedPanel (g, getLocalBounds().toFloat(), Theme::green);
+        else
+            Theme::drawPanel (g, getLocalBounds().toFloat());
     }
 
     void resized() override

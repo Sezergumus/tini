@@ -24,21 +24,26 @@ public:
         auto r = getLocalBounds().toFloat();
         const bool open = getToggleState();
 
-        if (highlighted && ! open)
-        {
-            g.setColour (juce::Colours::white.withAlpha (0.05f));
-            g.fillRoundedRectangle (r.reduced (2.0f, 9.0f), 6.0f);
-        }
-
-        g.setColour (open || highlighted ? Theme::textHi : Theme::textMid);
-        g.setFont (Theme::ui (14.0f, true));
-        g.drawText (getButtonText(), r, juce::Justification::centred, false);
+        // one segment of the capsule the header paints behind the tabs: the open page is a raised pill
+        auto pill = r.withSizeKeepingCentre (r.getWidth() - 4.0f, 28.0f);
 
         if (open)
         {
-            g.setColour (Theme::accent);
-            g.fillRoundedRectangle (r.getX() + 14.0f, r.getBottom() - 9.0f, r.getWidth() - 28.0f, 2.0f, 1.0f);
+            juce::Path p;
+            p.addRoundedRectangle (pill, pill.getHeight() * 0.5f);
+            juce::DropShadow (juce::Colours::black.withAlpha (0.4f), 4, { 0, 1 }).drawForPath (g, p);
+            g.setColour (juce::Colour (0xff636366));
+            g.fillPath (p);
         }
+        else if (highlighted)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.fillRoundedRectangle (pill, pill.getHeight() * 0.5f);
+        }
+
+        g.setColour (open || highlighted ? Theme::textHi : Theme::textMid);
+        g.setFont (Theme::ui (13.0f, true));
+        g.drawText (getButtonText(), r, juce::Justification::centred, false);
     }
 };
 

@@ -40,6 +40,7 @@ public:
 
         // the page covers the chain strip, so it brings its own way back
         doneButton.setButtonText ("Done");
+        doneButton.getProperties().set ("primary", true);
         doneButton.onClick = [this] { if (onClose) onClose(); };
         addAndMakeVisible (doneButton);
     }

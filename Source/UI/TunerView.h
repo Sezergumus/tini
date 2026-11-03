@@ -12,7 +12,7 @@ class TunerView : public juce::Component, private juce::Timer
 {
 public:
     explicit TunerView (TiniAudioProcessor& p)
-        : processor (p), muteSwitch (Theme::accent)
+        : processor (p), muteSwitch (Theme::green)
     {
         // muted when opened the first time; after that the way the user left the switch
         muteSwitch.setToggleState (processor.getTunerMuteDefault(), juce::dontSendNotification);
@@ -98,7 +98,7 @@ public:
         g.setFont (Theme::ui (12.5f));
         g.drawText ("Mute output", muteLabel, juce::Justification::centredRight, false);
 
-        const auto tint = isInTune() ? Theme::accent : Theme::textHi;
+        const auto tint = isInTune() ? Theme::green : Theme::textHi;
 
         // note name and octave
         if (noteShown)
@@ -116,7 +116,7 @@ public:
             g.setFont (big);
             g.drawText (name, juce::Rectangle<float> (x, (float) noteArea.getY(), nameW + 2.0f, (float) noteArea.getHeight()),
                         juce::Justification::centredLeft, false);
-            g.setColour (isInTune() ? Theme::accent : Theme::textMid);
+            g.setColour (isInTune() ? Theme::green : Theme::textMid);
             g.setFont (small);
             g.drawText (octave, juce::Rectangle<float> (x + nameW + 6.0f, (float) noteArea.getY() + 22.0f, octaveW + 2.0f, 44.0f),
                         juce::Justification::centredLeft, false);
@@ -136,7 +136,7 @@ public:
         g.setColour (Theme::trackBg);
         g.fillRoundedRectangle (strip.withSizeKeepingCentre (strip.getWidth(), 4.0f), 2.0f);
 
-        g.setColour (Theme::accent.withAlpha (0.28f));
+        g.setColour (Theme::green.withAlpha (0.28f));
         g.fillRoundedRectangle (juce::Rectangle<float> (midX - inTuneCents * unit, strip.getCentreY() - 2.0f, inTuneCents * 2.0f * unit, 4.0f), 2.0f);
 
         g.setFont (Theme::ui (11.0f));
@@ -167,7 +167,7 @@ public:
         g.setFont (Theme::ui (14.0f));
         if (noteShown)
         {
-            g.setColour (isInTune() ? Theme::accent : Theme::textMid);
+            g.setColour (isInTune() ? Theme::green : Theme::textMid);
             g.drawText ((shownCents >= 0.0f ? "+" : "") + juce::String (shownCents, 1) + " cents   "
                             + juce::String (juce::CharPointer_UTF8 ("\xc2\xb7")) + "   " + juce::String (shownHz, 1) + " Hz",
                         readoutArea, juce::Justification::centred, false);

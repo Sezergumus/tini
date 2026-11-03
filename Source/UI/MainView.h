@@ -315,11 +315,21 @@ private:
     //==========================================================================
     void paintHeader (juce::Graphics& g, juce::Rectangle<float> r)
     {
-        // product name (text only, no logo mark)
-        g.setFont (Theme::ui (22.0f, true));
-        g.setColour (Theme::textHi);
-        g.drawText (juce::String (juce::CharPointer_UTF8 ("t\xc4\xb1n\xc4\xb1")),   // "tını"
-                    juce::Rectangle<float> ((float) margin + 2.0f, r.getY(), 200.0f, r.getHeight()), juce::Justification::centredLeft, false);
+        // product name in a gradient through the system colours
+        const auto name = juce::String (juce::CharPointer_UTF8 ("t\xc4\xb1n\xc4\xb1"));   // "tını"
+        const auto font = Theme::ui (23.0f, true, -0.02f);
+        const auto nameArea = juce::Rectangle<float> ((float) margin + 2.0f, r.getY(), font.getStringWidthFloat (name) + 2.0f, r.getHeight());
+        juce::ColourGradient grad (Theme::ampColour, nameArea.getX(), 0.0f, Theme::purple, nameArea.getRight(), 0.0f, false);
+        grad.addColour (0.5, Theme::pink);
+        g.setGradientFill (grad);
+        g.setFont (font);
+        g.drawText (name, nameArea, juce::Justification::centredLeft, false);
+
+        // track of the page tabs (each tab paints its own pill on it)
+        const auto tabs = rigTab.getBounds().getUnion (libraryTab.getBounds()).toFloat()
+                              .withSizeKeepingCentre ((float) (rigTab.getWidth() + libraryTab.getWidth()), 32.0f);
+        g.setColour (juce::Colour (0xff1c1c1e));
+        g.fillRoundedRectangle (tabs, 16.0f);
     }
 
     //==========================================================================

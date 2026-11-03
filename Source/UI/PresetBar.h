@@ -31,6 +31,7 @@ public:
         addAndMakeVisible (nameEditor);
 
         saveButton.setButtonText ("Save");
+        saveButton.getProperties().set ("primary", true);
         saveButton.onClick = [this] { save(); };
         addAndMakeVisible (saveButton);
 
@@ -216,6 +217,7 @@ public:
         nameButton.onClick = [this] { showList(); };
 
         saveButton.setButtonText ("Save");
+        saveButton.getProperties().set ("primary", true);
         saveButton.onClick = [this] { showSaveDialog(); };
 
         for (auto* c : std::initializer_list<juce::Component*> { &prevButton, &nameButton, &nextButton })

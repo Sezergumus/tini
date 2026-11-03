@@ -162,16 +162,23 @@ public:
 
     void paintButton (juce::Graphics& g, bool highlighted, bool) override
     {
+        // iOS switch: a capsule filled with the colour when on, a white knob with a soft shadow
         const bool on = getToggleState();
-        auto r = getLocalBounds().toFloat().withSizeKeepingCentre (36.0f, 20.0f);
+        auto r = getLocalBounds().toFloat().withSizeKeepingCentre (42.0f, 25.0f);
 
-        g.setColour (on ? tint.withAlpha (highlighted ? 0.95f : 0.85f) : Theme::trackBg.brighter (highlighted ? 0.15f : 0.0f));
+        if (on)
+            g.setGradientFill (Theme::fillGradient (highlighted ? tint.brighter (0.1f) : tint, r));
+        else
+            g.setColour (juce::Colour (0xff39393d).brighter (highlighted ? 0.12f : 0.0f));
         g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
 
-        const float d = r.getHeight() - 6.0f;
-        const float x = on ? r.getRight() - 3.0f - d : r.getX() + 3.0f;
-        g.setColour (on ? juce::Colours::white : Theme::textMid);
-        g.fillEllipse (x, r.getY() + 3.0f, d, d);
+        const float d = r.getHeight() - 4.0f;
+        const float x = on ? r.getRight() - 2.0f - d : r.getX() + 2.0f;
+        juce::Path knob;
+        knob.addEllipse (x, r.getY() + 2.0f, d, d);
+        juce::DropShadow (juce::Colours::black.withAlpha (0.35f), 4, { 0, 2 }).drawForPath (g, knob);
+        g.setColour (juce::Colours::white);
+        g.fillPath (knob);
     }
 
 private:
@@ -284,14 +291,25 @@ public:
         const float w = bar.getWidth() * Theme::dbToUnit (shown, floorDb);
         if (w > 0.5f)
         {
-            g.setColour (isClipping() ? Theme::danger : Theme::accent);
+            // green through yellow to orange along the scale (fixed to dB, not to the level), red while clipping
+            if (isClipping())
+            {
+                g.setColour (Theme::danger);
+            }
+            else
+            {
+                juce::ColourGradient grad (Theme::green, bar.getX(), 0.0f, Theme::ampColour, bar.getRight(), 0.0f, false);
+                grad.addColour (Theme::dbToUnit (-18.0f, floorDb), Theme::green);
+                grad.addColour (Theme::dbToUnit (-6.0f, floorDb), Theme::amber);
+                g.setGradientFill (grad);
+            }
             g.fillRoundedRectangle (bar.withWidth (w), barHeight * 0.5f);
         }
 
         if (peak > floorDb + 1.0f)
         {
             const float px = bar.getX() + bar.getWidth() * Theme::dbToUnit (peak, floorDb);
-            g.setColour (isClipping() ? Theme::danger : Theme::textMid);
+            g.setColour (isClipping() ? Theme::danger : Theme::textHi);
             g.fillRect (px - 1.0f, bar.getY() - 2.0f, 2.0f, bar.getHeight() + 4.0f);
         }
 
@@ -428,8 +446,11 @@ private:
         g.setColour (Theme::textLo);
         g.fillRect (zeroX - 0.5f, y - 4.5f, 1.0f, 9.0f);   // 0 dB notch
 
-        g.setColour (changed ? Theme::accent : Theme::textMid);
-        g.fillEllipse (thumbX - 4.5f, y - 4.5f, 9.0f, 9.0f);
+        juce::Path thumb;
+        thumb.addEllipse (thumbX - 5.5f, y - 5.5f, 11.0f, 11.0f);
+        juce::DropShadow (juce::Colours::black.withAlpha (0.5f), 4, { 0, 1 }).drawForPath (g, thumb);
+        g.setColour (juce::Colours::white);
+        g.fillPath (thumb);
 
         g.setColour (changed ? Theme::textHi : Theme::textLo);
         g.setFont (Theme::ui (11.0f));

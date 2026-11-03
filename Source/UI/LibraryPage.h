@@ -37,24 +37,37 @@ public:
         auto r = getLocalBounds().toFloat().reduced (0.0f, 1.0f);
         const bool open = getToggleState();
 
-        if (open || highlighted)
-        {
-            g.setColour (open ? Theme::surfaceHi : juce::Colours::white.withAlpha (0.04f));
-            g.fillRoundedRectangle (r, 8.0f);
-        }
+        // a macOS sidebar: each section has an icon in its colour, the open one a filled row in that colour
+        const auto name = getButtonText();
+        const auto colour = name == "Amps" ? Theme::ampColour : name == "Pedals" ? Theme::purple
+                          : name == "Cabs" ? Theme::cabColour : Theme::green;
 
         if (open)
         {
-            g.setColour (Theme::accent);
-            g.fillRoundedRectangle (r.getX() + 2.0f, r.getY() + 11.0f, 3.0f, r.getHeight() - 22.0f, 1.5f);
+            g.setGradientFill (Theme::fillGradient (colour.withMultipliedBrightness (0.8f), r));
+            g.fillRoundedRectangle (r, 10.0f);
+        }
+        else if (highlighted)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.05f));
+            g.fillRoundedRectangle (r, 10.0f);
         }
 
-        auto text = r.reduced (18.0f, 0.0f);
-        g.setColour (open ? Theme::textHi : Theme::textMid);
+        const auto icon = juce::Rectangle<float> (22.0f, 22.0f).withCentre ({ r.getX() + 23.0f, r.getCentreY() });
+        if (open)
+            g.setColour (juce::Colours::white.withAlpha (0.25f));
+        else
+            g.setGradientFill (Theme::fillGradient (colour, icon));
+        g.fillRoundedRectangle (icon, 6.0f);
+        g.setColour (juce::Colours::white);
+        g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (icon.getCentre()));
+
+        auto text = r.withTrimmedLeft (44.0f).withTrimmedRight (14.0f);
+        g.setColour (open ? juce::Colours::white : Theme::textHi);
         g.setFont (Theme::ui (14.0f, open));
         g.drawText (getButtonText(), text, juce::Justification::centredLeft, false);
 
-        g.setColour (Theme::textLo);
+        g.setColour (open ? juce::Colours::white.withAlpha (0.8f) : Theme::textLo);
         g.setFont (Theme::ui (12.0f));
         g.drawText (juce::String (count), text, juce::Justification::centredRight, false);
     }
@@ -420,6 +433,7 @@ private:
         const bool hasFile = list.getSelectedFile() != juce::File();
 
         primaryButton.setButtonText (primaryLabel (section));
+        primaryButton.getProperties().set ("primary", true);
         renameButton.setButtonText (section == Kind::cabs ? "Rename" : "Edit");
         secondaryButton.setVisible (section == Kind::other);
 

@@ -3,9 +3,10 @@
 #include <JuceHeader.h>
 #include <InterFontData.h>
 
-// Central place for the visual language of the plugin: a neutral grey interface with ONE colour per
-// screen. Amp and Cab pages use the cyan accent, every pedal page uses the soft colour of its
-// category (see categoryColour). Red is only for clipping and errors.
+// Central place for the visual language of the plugin. This is the "Apple" variant: the dark
+// system palette of macOS / iOS (true black window, #1C1C1E cards, #2C2C2E controls) with the vivid
+// system colours. Every block has a colour of its own: the amp is orange, the cab teal, each pedal
+// category one system colour; generic controls use system blue. Red is only for clipping and errors.
 namespace Theme
 {
     // Design-space size of the whole UI. The editor scales this to the real window size.
@@ -15,25 +16,32 @@ namespace Theme
     // 8 px grid
     constexpr int unit = 8;
 
-    // Surfaces. One level of surface on top of the background, no gradients.
-    inline const juce::Colour bg           { 0xff0f1113 };
-    inline const juce::Colour surface      { 0xff17191c };
-    inline const juce::Colour surfaceHi    { 0xff202327 };   // hovered / selected surface
-    inline const juce::Colour panelBorder  { 0xff23262a };
-    inline const juce::Colour inset        { 0xff111315 };
-    inline const juce::Colour insetBorder  { 0xff1f2226 };
-    inline const juce::Colour trackBg      { 0xff2a2d32 };
-    inline const juce::Colour divider      { 0x14ffffff };
+    // Surfaces (systemBackground / secondarySystemBackground / tertiary)
+    inline const juce::Colour bg           { 0xff000000 };
+    inline const juce::Colour surface      { 0xff1c1c1e };
+    inline const juce::Colour surfaceHi    { 0xff2c2c2e };   // hovered / selected surface
+    inline const juce::Colour panelBorder  { 0xff38383a };
+    inline const juce::Colour inset        { 0xff2c2c2e };   // fields and segmented tracks sit lighter on the card
+    inline const juce::Colour insetBorder  { 0xff3a3a3c };
+    inline const juce::Colour trackBg      { 0xff3a3a3c };
+    inline const juce::Colour divider      { 0x26ffffff };   // separator
 
-    // Text
-    inline const juce::Colour textHi       { 0xffe6e8ea };
-    inline const juce::Colour textMid      { 0xff9097a0 };
-    inline const juce::Colour textLo       { 0xff5c626a };
+    // Text (label / secondaryLabel / tertiaryLabel)
+    inline const juce::Colour textHi       { 0xfff5f5f7 };
+    inline const juce::Colour textMid      { 0xff98989f };
+    inline const juce::Colour textLo       { 0xff636366 };
 
-    // Colours
-    inline const juce::Colour accent       { 0xff3dd3ee };   // cyan: amp, cab and everything generic
-    inline const juce::Colour amber        { 0xffe8a54b };   // the Gain category
-    inline const juce::Colour danger       { 0xffff5d55 };   // clip and errors only
+    // System colours (dark appearance)
+    inline const juce::Colour accent       { 0xff0a84ff };   // systemBlue: everything generic
+    inline const juce::Colour amber        { 0xffffd60a };   // systemYellow: the Gain category
+    inline const juce::Colour danger       { 0xffff453a };   // systemRed: clip and errors only
+    inline const juce::Colour ampColour    { 0xffff9f0a };   // systemOrange
+    inline const juce::Colour cabColour    { 0xff40c8e0 };   // systemTeal
+    inline const juce::Colour green        { 0xff30d158 };   // systemGreen
+    inline const juce::Colour purple       { 0xffbf5af2 };   // systemPurple
+    inline const juce::Colour pink         { 0xffff375f };   // systemPink
+    inline const juce::Colour indigo       { 0xff5e5ce6 };   // systemIndigo
+    inline const juce::Colour mint         { 0xff66d4cf };   // systemMint
 
     // Kept so older call sites compile; the surfaces are flat now.
     inline const juce::Colour bgTop        = bg;
@@ -41,16 +49,27 @@ namespace Theme
     inline const juce::Colour panelTop     = surface;
     inline const juce::Colour panelBottom  = surface;
 
-    /** Soft colour of a pedal category (the strings used by PedalCatalog). Unknown names get the accent. */
+    /** Colour of a pedal category (the strings used by PedalCatalog). Unknown names get the accent. */
     inline juce::Colour categoryColour (const juce::String& category)
     {
-        if (category == "DYNAMICS")   return juce::Colour (0xff9d8cf0);   // violet
+        if (category == "DYNAMICS")   return purple;
         if (category == "GAIN")       return amber;
-        if (category == "MODULATION") return juce::Colour (0xff5b9cf0);   // blue
-        if (category == "TIME")       return juce::Colour (0xffe57fa8);   // pink
-        if (category == "SPACE")      return juce::Colour (0xff4fc4b0);   // teal
-        if (category == "NAM MODEL")  return juce::Colour (0xffe0825f);   // terracotta
+        if (category == "MODULATION") return indigo;
+        if (category == "TIME")       return pink;
+        if (category == "SPACE")      return mint;
+        if (category == "NAM MODEL")  return green;
         return accent;
+    }
+
+    /** The lighter end of a colour's gradient (Apple fills run from a lighter top to the colour). */
+    inline juce::Colour light (juce::Colour c)  { return c.interpolatedWith (juce::Colours::white, 0.28f); }
+
+    /** Vertical gradient for a filled shape in `c`: lighter at the top, the colour itself, a little deeper at the bottom. */
+    inline juce::ColourGradient fillGradient (juce::Colour c, juce::Rectangle<float> r)
+    {
+        juce::ColourGradient grad (light (c), r.getX(), r.getY(), c.darker (0.25f), r.getX(), r.getBottom(), false);
+        grad.addColour (0.45, c);
+        return grad;
     }
 
     //==========================================================================
@@ -87,13 +106,29 @@ namespace Theme
     }
 
     //==========================================================================
-    inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> r, float radius = 12.0f)
+    inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> r, float radius = 18.0f)
     {
         g.setColour (surface);
         g.fillRoundedRectangle (r, radius);
+        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
     }
 
-    inline void drawInset (juce::Graphics& g, juce::Rectangle<float> r, float radius = 8.0f)
+    /** A card with a wash of `c` coming down from its top edge (the block page takes its block's colour). */
+    inline void drawTintedPanel (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c, float radius = 18.0f)
+    {
+        drawPanel (g, r, radius);
+
+        juce::Path card;
+        card.addRoundedRectangle (r, radius);
+        juce::ColourGradient wash (c.withAlpha (0.17f), r.getX(), r.getY(),
+                                   c.withAlpha (0.0f), r.getX(), r.getY() + r.getHeight() * 0.7f, false);
+        wash.addColour (0.3, c.withAlpha (0.06f));
+        g.setGradientFill (wash);
+        g.fillPath (card);
+    }
+
+    inline void drawInset (juce::Graphics& g, juce::Rectangle<float> r, float radius = 10.0f)
     {
         g.setColour (inset);
         g.fillRoundedRectangle (r, radius);
