@@ -823,7 +823,9 @@ public:
                                                  BlockTile::width, BlockTile::height));
         b.removeFromRight (BlockTile::width);
         b.removeFromRight (24);
-        addButton.setBounds (b.removeFromRight (AddButton::size).withSizeKeepingCentre (AddButton::size, AddButton::size));
+        // on the signal line: the centre of the tiles, which leave 8 px for the scroll bar
+        addButton.setBounds (juce::Rectangle<int> (b.removeFromRight (AddButton::size).getX(), (h - 8 - AddButton::size) / 2,
+                                                   AddButton::size, AddButton::size));
         b.removeFromRight (16);
 
         viewport.setBounds (b);

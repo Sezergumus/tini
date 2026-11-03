@@ -64,6 +64,46 @@ private:
 };
 
 //==============================================================================
+/** A small arc that turns while something runs in the background (the Tidy up button). */
+class BusySpinner : public juce::Component, private juce::Timer
+{
+public:
+    BusySpinner() { setInterceptsMouseClicks (false, false); }
+    ~BusySpinner() override { stopTimer(); }
+
+    void setRunning (bool on)
+    {
+        setVisible (on);
+
+        if (on)
+            startTimerHz (30);
+        else
+            stopTimer();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat().reduced (2.0f);
+
+        juce::Path arc;
+        arc.addCentredArc (r.getCentreX(), r.getCentreY(), r.getWidth() * 0.5f, r.getHeight() * 0.5f, 0.0f,
+                           angle, angle + juce::MathConstants<float>::pi * 1.4f, true);
+
+        g.setColour (Theme::accent);
+        g.strokePath (arc, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+private:
+    void timerCallback() override
+    {
+        angle = std::fmod (angle + 0.35f, juce::MathConstants<float>::twoPi);
+        repaint();
+    }
+
+    float angle = 0.0f;
+};
+
+//==============================================================================
 /** The Library: everything in Documents/tini in four sections (Amps, Pedals, Cabs, Other models).
 
     Left, Add files above the sections with their file counts. Right, a search field with Open folder, the
@@ -99,9 +139,9 @@ public:
         list.onMoved = [this] (const juce::File& oldFile, const juce::File& newFile, Kind)
         {
             fileRenamed (oldFile, newFile);   // a model in use keeps being used from its new place
-            countFiles();
         };
-        list.onFilesDropped = [this] (const juce::Array<juce::File>& dropped) { addSorted (dropped); };
+        list.onMovedAll = [this] { countFiles(); updateActions(); };
+        list.onFilesDropped = [this] (const juce::Array<juce::File>& dropped) { addSortedChecked (dropped); };
         list.onDeleted = [this] (const juce::File&) { updateActions(); countFiles(); };
         list.onEdited = [this] (const juce::File&) { updateActions(); repaint(); };
         list.onAdded = [this] (const juce::Array<juce::File>&) { countFiles(); };
@@ -139,6 +179,8 @@ public:
 
         for (auto* b : { &addButton, &tidyButton, &folderButton, &primaryButton, &secondaryButton, &renameButton, &revealButton, &deleteButton })
             addAndMakeVisible (b);
+
+        addChildComponent (spinner);   // above the buttons
 
         sections[0]->setToggleState (true, juce::dontSendNotification);
         showSection (Kind::amps);
@@ -271,6 +313,7 @@ public:
         }
 
         tidyButton.setBounds (column.removeFromBottom (30));
+        spinner.setBounds (juce::Rectangle<int> (16, 16).withCentre ({ tidyButton.getX() + 20, tidyButton.getBounds().getCentreY() }));
 
         auto right = rightArea();
         auto head = right.removeFromTop (headerHeight);
@@ -357,6 +400,19 @@ private:
     static juce::String gearTypeLabel (const juce::String& gearType) { return LibraryFilter::prettify (gearType); }
 
     SectionButton& sectionFor (Kind k) { return *sections[(int) k]; }
+
+    /** A model without metadata goes where the open section is, if that is a model section. */
+    Kind namDefault() const { return FileLibrary::isModelKind (section) ? section : Kind::amps; }
+
+    /** The Tidy up button shows what is going on while the work runs in the background. */
+    void setBusy (bool on, const juce::String& text)
+    {
+        busy = on;
+        tidyButton.setEnabled (! on);
+        tidyButton.setButtonText (on ? text : juce::String ("Tidy up"));
+        spinner.setRunning (on);
+        resized();
+    }
 
     /** Which buttons the open section offers; they need a selected file to do anything. */
     void updateActions()
@@ -449,7 +505,7 @@ private:
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<LibraryPage> (this)] (const juce::FileChooser& fc)
         {
             if (safe != nullptr)
-                safe->addSorted (fc.getResults());
+                safe->addSortedChecked (fc.getResults());
         });
     }
 
@@ -458,9 +514,26 @@ public:
         a pack folder. Returns how many came in. */
     int addSorted (const juce::Array<juce::File>& sources)
     {
-        // a model without metadata goes where the open section is, if that is a model section
         const FileLibrary::Batch batch (sources);
-        const auto done = FileLibrary::importBatch (batch, nullptr, FileLibrary::isModelKind (section) ? section : Kind::amps);
+        return addBatch (batch, false);
+    }
+
+    /** The same, but asks first if something is in the library already. */
+    void addSortedChecked (const juce::Array<juce::File>& sources)
+    {
+        auto batch = std::make_shared<FileLibrary::Batch> (sources);
+        const auto report = FileLibrary::inspect (*batch, nullptr, namDefault());
+
+        FileActions::confirmImport (this, report, {}, [safe = juce::Component::SafePointer<LibraryPage> (this), batch] (bool again)
+        {
+            if (safe != nullptr)
+                safe->addBatch (*batch, again);
+        });
+    }
+
+    int addBatch (const FileLibrary::Batch& batch, bool again)
+    {
+        const auto done = FileLibrary::importBatch (batch, nullptr, namDefault(), again);
 
         if (! done.empty())
         {
@@ -473,10 +546,33 @@ public:
     }
 
     /** Looks for what is out of order (models in the wrong section, loose captures of one make and model) and
-        offers to put it right. */
+        offers to put it right. Looking means opening every model file, so it runs in the background while a
+        spinner shows on the button. */
     void askTidy()
     {
-        const auto moves = FileLibrary::planTidy();
+        if (busy)
+            return;
+
+        setBusy (true, "Looking...");
+
+        juce::Thread::launch ([safe = juce::Component::SafePointer<LibraryPage> (this)]
+        {
+            auto moves = FileLibrary::planTidy();
+
+            juce::MessageManager::callAsync ([safe, moves = std::move (moves)]
+            {
+                if (safe != nullptr)
+                    safe->offerTidy (moves);
+            });
+        });
+    }
+
+    bool isBusy() const { return busy; }
+
+    /** The answer of the background look: say what would change and ask. */
+    void offerTidy (const std::vector<FileLibrary::TidyMove>& moves)
+    {
+        setBusy (false, {});
 
         int sections = 0, grouped = 0;
         std::set<juce::String> packs;
@@ -514,15 +610,36 @@ public:
         FormDialog::show (std::move (dialog), this);
     }
 
+    /** Does the moves in the background; the page follows when they are done. */
     void applyTidy (const std::vector<FileLibrary::TidyMove>& moves)
     {
-        for (const auto& m : moves)
-        {
-            const auto moved = FileLibrary::moveTo (m.file, m.kind, m.pack);
-            if (moved.existsAsFile() && moved != m.file)
-                fileRenamed (m.file, moved);   // a model in use keeps being used from its new place
-        }
+        setBusy (true, "Tidying up...");
 
+        juce::Thread::launch ([safe = juce::Component::SafePointer<LibraryPage> (this), moves]
+        {
+            std::vector<std::pair<juce::File, juce::File>> moved;
+
+            for (const auto& m : moves)
+            {
+                const auto now = FileLibrary::moveTo (m.file, m.kind, m.pack);
+                if (now.existsAsFile() && now != m.file)
+                    moved.emplace_back (m.file, now);
+            }
+
+            juce::MessageManager::callAsync ([safe, moved = std::move (moved)]
+            {
+                if (safe != nullptr)
+                    safe->tidyDone (moved);
+            });
+        });
+    }
+
+    void tidyDone (const std::vector<std::pair<juce::File, juce::File>>& moved)
+    {
+        for (const auto& m : moved)
+            fileRenamed (m.first, m.second);   // a model in use keeps being used from its new place
+
+        setBusy (false, {});
         list.rescan();
         countFiles();
         updateActions();
@@ -542,6 +659,8 @@ private:
     ModelList list;
     FilterBar filterBar;
     juce::TextEditor searchBox;
+    BusySpinner spinner;
+    bool busy = false;
     juce::TextButton addButton, tidyButton, folderButton, primaryButton, secondaryButton, renameButton, revealButton, deleteButton;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::String shownUsage;

@@ -206,8 +206,8 @@ namespace FileLibrary
     /** Puts `source` into the library folder of `kind` (into the subfolder `pack`, if given) and returns the
         copy; empty on failure. A file that already sits in the library folder of that kind is returned as it is.
         If a file of the same name exists, the same content is reused, different content gets a numbered name
-        ("name (2).nam"). */
-    inline juce::File importFile (const juce::File& source, Kind kind, const juce::String& pack = {})
+        ("name (2).nam"); with `again` the same content is copied too, under a numbered name. */
+    inline juce::File importFile (const juce::File& source, Kind kind, const juce::String& pack = {}, bool again = false)
     {
         if (! source.existsAsFile())
             return {};
@@ -225,7 +225,7 @@ namespace FileLibrary
 
         if (target.existsAsFile())
         {
-            if (target.hasIdenticalContentTo (source))
+            if (! again && target.hasIdenticalContentTo (source))
                 return target;
 
             target = target.getNonexistentSibling (true);
@@ -474,7 +474,7 @@ namespace FileLibrary
     /** Copies a batch into the library. `forced` puts every model / IR that fits it into that kind (a list that
         belongs to one folder); without it each file goes where it belongs (see kindOfFile; a model without
         metadata goes to `namDefault`). Anything that cannot be used is skipped. */
-    inline std::vector<Imported> importBatch (const Batch& batch, const Kind* forced, Kind namDefault = Kind::amps)
+    inline std::vector<Imported> importBatch (const Batch& batch, const Kind* forced, Kind namDefault = Kind::amps, bool again = false)
     {
         std::vector<Imported> done;
 
@@ -493,12 +493,73 @@ namespace FileLibrary
                 continue;
             }
 
-            const auto copy = importFile (item.file, kind, item.pack);
+            const auto copy = importFile (item.file, kind, item.pack, again);
             if (copy.existsAsFile())
                 done.push_back ({ copy, kind });
         }
 
         return done;
+    }
+
+    /** What adding a batch would run into: files that are in the library already, and (for a list that belongs
+        to one section) models that look like they belong to another. */
+    struct ImportReport
+    {
+        int total = 0, duplicates = 0, mismatched = 0;
+        Kind looksLike = Kind::amps;   // the section most of the mismatched ones belong in
+    };
+
+    inline ImportReport inspect (const Batch& batch, const Kind* forced, Kind namDefault = Kind::amps)
+    {
+        ImportReport report;
+        std::map<int, int> votes;
+
+        for (const auto& item : batch.items)
+        {
+            Kind kind = namDefault;
+
+            if (forced != nullptr)
+            {
+                if (! fits (item.file, *forced))
+                    continue;
+                kind = *forced;
+            }
+            else if (! kindOfFile (item.file, kind, namDefault))
+            {
+                continue;
+            }
+
+            ++report.total;
+
+            Kind holder;
+            if (kindHolding (item.file, holder))
+            {
+                ++report.duplicates;   // it is in the library already
+            }
+            else
+            {
+                const auto target = packFolder (kind, item.pack).getChildFile (item.file.getFileName());
+                if (target.existsAsFile() && target.hasIdenticalContentTo (item.file))
+                    ++report.duplicates;
+            }
+
+            Kind says;
+            if (forced != nullptr && isModelKind (kind) && kindOfGearType (NamMetadata::read (item.file).gearType, says) && says != kind)
+            {
+                ++report.mismatched;
+                ++votes[(int) says];
+            }
+        }
+
+        int best = 0;
+        for (const auto& v : votes)
+            if (v.second > best)
+            {
+                best = v.second;
+                report.looksLike = (Kind) v.first;
+            }
+
+        return report;
     }
 
     //==========================================================================

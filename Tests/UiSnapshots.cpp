@@ -1088,6 +1088,32 @@ void renderUiSnapshots (const juce::File& dir)
                         && FileLibrary::libraryFolder (Kind::amps).getChildFile ("Marshall Plexi").getChildFile ("Plexi 0.nam").existsAsFile(),
                     "...and doing it puts the files there");
             report (FileLibrary::planTidy().empty(), "a tidy library has nothing left to tidy");
+
+            // a pedal capture offered to Amps is flagged, so is a file that is there already
+            {
+                const auto pedalFile = outside.getChildFile ("Looks Like A Pedal.nam");
+                testModels.getChildFile ("test_a2.nam").copyFileTo (pedalFile);
+                NamMetadata::Info info;
+                info.gearType = "pedal";
+                NamMetadata::write (pedalFile, info);
+
+                const FileLibrary::Batch one ({ pedalFile });
+                const auto amps = FileLibrary::Kind::amps;
+                auto r = FileLibrary::inspect (one, &amps);
+                report (r.total == 1 && r.mismatched == 1 && r.looksLike == FileLibrary::Kind::pedals && r.duplicates == 0,
+                        "a pedal offered to Amps is flagged as looking like a pedal");
+
+                const auto pedals = FileLibrary::Kind::pedals;
+                r = FileLibrary::inspect (one, &pedals);
+                report (r.mismatched == 0, "...but not when it goes to Pedals");
+
+                FileLibrary::importFile (pedalFile, pedals);
+                r = FileLibrary::inspect (one, &pedals);
+                report (r.duplicates == 1, "a file that is in the library already is flagged");
+
+                const auto copies = FileLibrary::importBatch (one, &pedals, FileLibrary::Kind::amps, true);
+                report (copies.size() == 1 && copies[0].file.getFileName() != "Looks Like A Pedal.nam", "adding it again makes a numbered copy");
+            }
             FileLibrary::rootOverride().deleteRecursively();
         }
 
@@ -1541,6 +1567,44 @@ void renderUiSnapshots (const juce::File& dir)
                 list.filesDropped ({ dropped.getFullPathName() }, 0, 0);
                 settleLoop (100);
                 report (list.getNumFiles() == 3 && libPage.getSectionButton (Kind::pedals).getCount() == 3, "a dropped file is added to the section and counted");
+
+                // the same file again: the Library asks before it makes a second copy
+                list.filesDropped ({ dropped.getFullPathName() }, 0, 0);
+                settleLoop (100);
+                auto* again = findFirst<FormDialog> (*editor);
+                report (again != nullptr && list.getNumFiles() == 3, "dropping a file that is in the library already asks first");
+                if (again != nullptr)
+                {
+                    again->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+                    settleLoop (100);
+                    report (findFirst<FormDialog> (*editor) == nullptr && list.getNumFiles() == 3, "Cancel adds nothing");
+                }
+
+                list.filesDropped ({ dropped.getFullPathName() }, 0, 0);
+                settleLoop (100);
+                again = findFirst<FormDialog> (*editor);
+                if (again != nullptr)
+                {
+                    again->getOkButton().triggerClick();
+                    settleLoop (100);
+                    report (list.getNumFiles() == 4, "Add anyway makes a numbered copy");
+
+                    for (int i = list.getNumFiles(); --i >= 0;)
+                        if (list.getFile (i).getFileName() != "Fresh Fuzz.nam" && list.getFile (i).getFileName().startsWith ("Fresh Fuzz"))
+                            list.deleteFile (list.getFile (i));
+                }
+
+                // Tidy up works in the background and shows it
+                libPage.askTidy();
+                report (libPage.isBusy(), "Tidy up shows that it is working");
+                settleLoop (1500);
+                auto* tidy = findFirst<FormDialog> (*editor);
+                report (! libPage.isBusy() && tidy != nullptr, "...and then reports what it found");
+                if (tidy != nullptr)
+                {
+                    tidy->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+                    settleLoop (100);
+                }
 
                 report (list.deleteFile (pedalsFolder.getChildFile ("Fresh Fuzz.nam")) && list.getNumFiles() == 2
                             && libPage.getSectionButton (Kind::pedals).getCount() == 2,

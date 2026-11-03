@@ -201,7 +201,7 @@ private:
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<PedalPicker> (this)] (const juce::FileChooser& fc)
         {
             if (safe != nullptr)
-                safe->library.addFiles (fc.getResults());
+                safe->library.addFilesChecked (fc.getResults());
         });
     }
 

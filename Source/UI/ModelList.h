@@ -74,6 +74,9 @@ public:
     /** Called after a file was moved to another section (old file, new file, the section it went to). */
     std::function<void (const juce::File&, const juce::File&, FileLibrary::Kind)> onMoved;
 
+    /** Called once after one or more files were moved (a single file or a whole pack). */
+    std::function<void()> onMovedAll;
+
     /** Called after files were copied in (with the files in the library); a drop or Add files. */
     std::function<void (const juce::Array<juce::File>&)> onAdded;
 
@@ -274,10 +277,30 @@ public:
         folders (those become packs). Returns how many were added. */
     int addFiles (const juce::Array<juce::File>& sources)
     {
+        const FileLibrary::Batch batch (sources);
+        return addBatch (batch, false);
+    }
+
+    /** Like addFiles, but asks first when something is in the library already or looks like it belongs to
+        another section. This is what a drop or the Add files button of a list runs. */
+    void addFilesChecked (const juce::Array<juce::File>& sources)
+    {
+        auto batch = std::make_shared<FileLibrary::Batch> (sources);
+        const auto report = FileLibrary::inspect (*batch, &kind);
+
+        FileActions::confirmImport (this, report, FileLibrary::folderName (kind),
+                                    [safe = juce::Component::SafePointer<ModelList> (this), batch] (bool again)
+        {
+            if (safe != nullptr)
+                safe->addBatch (*batch, again);
+        });
+    }
+
+    int addBatch (const FileLibrary::Batch& batch, bool again)
+    {
         FileLibrary::ensureFolders();
 
-        const FileLibrary::Batch batch (sources);
-        const auto done = FileLibrary::importBatch (batch, &kind);
+        const auto done = FileLibrary::importBatch (batch, &kind, FileLibrary::Kind::amps, again);
 
         juce::Array<juce::File> arrived;
         for (const auto& item : done)
@@ -398,7 +421,77 @@ public:
         if (onMoved)
             onMoved (file, moved, target);
 
+        if (onMovedAll)
+            onMovedAll();
+
         return true;
+    }
+
+    /** Moves a whole pack to another section (all of its files, also the ones a filter hides). Returns how many moved. */
+    int movePack (const juce::String& pack, FileLibrary::Kind target)
+    {
+        juce::Array<juce::File> members;
+        for (const auto& file : all)
+            if (FileLibrary::packOf (file, kind) == pack)
+                members.add (file);
+
+        juce::MouseCursor::showWaitCursor();
+
+        std::vector<std::pair<juce::File, juce::File>> moved;
+        for (const auto& file : members)
+        {
+            const auto now = FileLibrary::moveTo (file, target, pack);
+            if (now.existsAsFile() && now != file)
+                moved.emplace_back (file, now);
+        }
+
+        juce::MouseCursor::hideWaitCursor();
+
+        if (! moved.empty())
+        {
+            if (selected != juce::File() && selected.isAChildOf (FileLibrary::packFolder (kind, pack)))
+                selected = {};
+
+            rescan();
+
+            for (const auto& m : moved)
+                if (onMoved)
+                    onMoved (m.first, m.second, target);
+
+            if (onMovedAll)
+                onMovedAll();
+        }
+
+        return (int) moved.size();
+    }
+
+    /** The right click menu of a pack line. */
+    void showPackMenu (const juce::String& pack)
+    {
+        if (kind == FileLibrary::Kind::cabs)
+            return;
+
+        juce::PopupMenu menu;
+        menu.addSectionHeader (pack);
+
+        for (auto k : { FileLibrary::Kind::amps, FileLibrary::Kind::pedals, FileLibrary::Kind::other })
+            if (k != kind)
+                menu.addItem (10 + (int) k, "Move the whole pack to " + FileLibrary::folderName (k));
+
+        menu.addItem (3, "Show in file manager");
+        Theme::styleMenu (menu, *this);
+
+        menu.showMenuAsync (Theme::menuAtMouse (*this),
+                            [safe = juce::Component::SafePointer<ModelList> (this), pack] (int choice)
+        {
+            if (safe == nullptr || choice == 0)
+                return;
+
+            if (choice == 3)
+                FileLibrary::packFolder (safe->kind, pack).revealToUser();
+            else if (choice >= 10)
+                safe->movePack (pack, (FileLibrary::Kind) (choice - 10));
+        });
     }
 
     /** Models: a dialog for the name and for what the file says about itself (make, model, type, tone).
@@ -568,7 +661,7 @@ public:
         if (onFilesDropped)
             onFilesDropped (sources);
         else
-            addFiles (sources);
+            addFilesChecked (sources);
     }
 
     /** The second line of a row. */
@@ -971,7 +1064,9 @@ private:
 
         if (rows[(size_t) row].isPack)
         {
-            if (! e.mods.isPopupMenu() && ! isNarrowed())
+            if (e.mods.isPopupMenu())
+                showPackMenu (rows[(size_t) row].pack);
+            else if (! isNarrowed())
                 togglePack (rows[(size_t) row].pack);
             return;
         }

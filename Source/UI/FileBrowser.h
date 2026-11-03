@@ -93,6 +93,48 @@ namespace FileActions
         FormDialog::show (std::move (dialog), owner);
     }
 
+    /** Before files are added: if some of them are in the library already, or look like they belong to another
+        section than the list they were dropped on, asks first. Without a reason to ask it just calls `proceed`
+        (with true when copies of files that are there already are wanted). */
+    inline void confirmImport (juce::Component* owner, const FileLibrary::ImportReport& report,
+                               const juce::String& sectionName, std::function<void (bool again)> proceed)
+    {
+        if (report.duplicates == 0 && report.mismatched == 0)
+        {
+            proceed (false);
+            return;
+        }
+
+        auto count = [] (int n, const juce::String& what) { return juce::String (n) + " " + what + (n == 1 ? "" : "s"); };
+        juce::StringArray lines;
+
+        if (report.duplicates > 0)
+            lines.add (report.duplicates == report.total
+                           ? (report.total == 1 ? juce::String ("This file is already in the library.")
+                                                : "All " + count (report.total, "file") + " are already in the library.")
+                           : count (report.duplicates, "file") + " of " + juce::String (report.total) + " are already in the library.");
+
+        if (report.mismatched > 0)
+        {
+            const char* looks = report.looksLike == FileLibrary::Kind::pedals ? "pedals"
+                              : report.looksLike == FileLibrary::Kind::amps   ? "amps" : "something else than an amp or a pedal";
+            lines.add (count (report.mismatched, "file") + (report.mismatched == 1 ? " looks" : " look") + " like "
+                       + juce::String (looks) + " (by what " + (report.mismatched == 1 ? "it says" : "they say") + " about itself), not like \""
+                       + sectionName + "\".");
+        }
+
+        const bool again = report.duplicates > 0;
+        auto dialog = std::make_unique<FormDialog> (again ? "Add again?" : "Add to this section?",
+                                                    lines.joinIntoString (" ") + (again ? " Add them again anyway?" : " Add them here anyway?"),
+                                                    "Add anyway");
+        dialog->onSubmit = [proceed = std::move (proceed), again] (FormDialog&)
+        {
+            proceed (again);
+            return juce::Result::ok();
+        };
+        FormDialog::show (std::move (dialog), owner);
+    }
+
     /** Copies `sources` that fit `kind` into the library folder of `kind`; returns how many arrived. */
     inline int importAll (const juce::Array<juce::File>& sources, FileLibrary::Kind kind)
     {
