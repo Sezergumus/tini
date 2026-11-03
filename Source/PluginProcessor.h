@@ -60,6 +60,9 @@ public:
 
     void loadImpulseResponse(const juce::File& file);
 
+    /** Goes back to the generated guitar cab (DefaultCab.h); `loadedIrFile` becomes empty. */
+    void useBuiltInCab();
+
     //==============================================================================
     // Tuner. While the tuner page is open the UI switches it on: only then is the guitar input (channel
     // 1) copied into a lock-free FIFO that the UI reads, and the output can be muted. Nothing runs

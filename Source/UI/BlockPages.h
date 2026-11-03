@@ -235,16 +235,20 @@ public:
         prevButton.onClick = [this] { step (-1); };
         nextButton.onClick = [this] { step (+1); };
 
+        clearButton.setButtonText ("Clear");
+        clearButton.setTooltip ("Go back to the built-in cabinet");
+        clearButton.onClick = [this] { processor.useBuiltInCab(); showFile ({}); };
+
         browseButton.setButtonText ("Browse");
         browseButton.setTooltip ("Show the impulse responses in this folder");
         browseButton.setClickingTogglesState (true);
         browseButton.setToggleState (true, juce::dontSendNotification);
         browseButton.onClick = [this] { if (onBrowseToggled) onBrowseToggled(); };
 
-        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &browseButton, &prevButton, &nextButton })
+        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &clearButton, &browseButton, &prevButton, &nextButton })
             addAndMakeVisible (b);
 
-        refresh();
+        showFile (processor.loadedIrFile);
     }
 
     /** Called when the Browse button was switched. */
@@ -281,7 +285,7 @@ public:
 
         g.setColour (Theme::textLo);
         g.setFont (Theme::ui (11.5f));
-        g.drawText (irInfo.isNotEmpty() ? irInfo : juce::String ("Load a .wav file to shape the cabinet"), text,
+        g.drawText (irInfo.isNotEmpty() ? irInfo : juce::String ("Load a .wav file to use your own cabinet"), text,
                     juce::Justification::centredLeft, true);
     }
 
@@ -290,17 +294,19 @@ public:
         auto buttons = getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30);
         loadButton.setBounds (buttons.removeFromRight (84));
         buttons.removeFromRight (6);
+        clearButton.setBounds (buttons.removeFromRight (56));
+        buttons.removeFromRight (6);
         browseButton.setBounds (buttons.removeFromRight (72));
         buttons.removeFromRight (6);
         nextButton.setBounds (buttons.removeFromRight (28));
         prevButton.setBounds (buttons.removeFromRight (28));
     }
 
-    juce::TextButton loadButton, browseButton;
+    juce::TextButton loadButton, clearButton, browseButton;
     StepButton prevButton { false, "ir_prev" }, nextButton { true, "ir_next" };
 
 private:
-    static constexpr int buttonsWidth = 84 + 72 + 56 + 3 * 6 + 12;
+    static constexpr int buttonsWidth = 84 + 56 + 72 + 56 + 4 * 6 + 12;
 
     /** The impulse response before / after the loaded one in its folder. */
     void step (int delta)
@@ -336,8 +342,9 @@ private:
     void showFile (const juce::File& file)
     {
         shownFile = file;
-        irName = file.existsAsFile() ? file.getFileName() : juce::String ("No IR loaded");
+        irName = file.existsAsFile() ? file.getFileName() : juce::String ("Built-in cabinet");
         irInfo = {};
+        clearButton.setVisible (file.existsAsFile());
 
         if (file.existsAsFile())
         {
@@ -355,7 +362,7 @@ private:
     NeuralFlowAmpAudioProcessor& processor;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::File shownFile;
-    juce::String irName { "No IR loaded" }, irInfo;
+    juce::String irName { "Built-in cabinet" }, irInfo;
 };
 
 //==============================================================================

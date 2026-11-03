@@ -67,6 +67,38 @@ namespace
         return best;
     }
 
+    float rms (const juce::AudioBuffer<float>& buf, int channel, int from)
+    {
+        double sum = 0.0;
+        for (int i = from; i < buf.getNumSamples(); ++i)
+            sum += (double) buf.getSample (channel, i) * buf.getSample (channel, i);
+        return (float) std::sqrt (sum / (buf.getNumSamples() - from));
+    }
+
+    /** The built-in cabinet colours the sound; a one-sample unit IR makes the cab stage transparent. */
+    void useFlatCab (NeuralFlowAmpAudioProcessor& p)
+    {
+        // the built-in cabinet is loaded in the background by the constructor: wait for it first, so
+        // that the unit IR is certain to be the last one the engine takes over
+        for (int i = 0; i < 300 && p.cabSimulator.getCurrentIRSize() <= 1; ++i)
+        {
+            run (p, 1, [] (int, juce::AudioBuffer<float>&) {});
+            juce::Thread::sleep (10);
+        }
+
+        juce::AudioBuffer<float> unit (1, 1);
+        unit.setSample (0, 0, 1.0f);
+        p.cabSimulator.loadImpulseResponse (std::move (unit), sampleRate, juce::dsp::Convolution::Stereo::no,
+                                            juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+
+        for (int i = 0; i < 300 && p.cabSimulator.getCurrentIRSize() != 1; ++i)
+        {
+            run (p, 1, [] (int, juce::AudioBuffer<float>&) {});
+            juce::Thread::sleep (10);
+        }
+        run (p, 8, [] (int, juce::AudioBuffer<float>&) {});   // finish the engine cross-fade
+    }
+
     /** Neutral settings so the signal path is easy to reason about. */
     void makeTransparent (NeuralFlowAmpAudioProcessor& p)
     {
@@ -74,6 +106,7 @@ namespace
         setParam (p, "OD_ON", 0.0f);
         setParam (p, "DRIVE", 1.0f);
         setParam (p, "MASTER", 10.0f);
+        useFlatCab (p);
     }
 
     /** IR = direct spike + an echo (half amplitude) `delay` samples later. A leading gap would be
@@ -145,6 +178,55 @@ namespace
 
         irFile.deleteFile();
     }
+    void testBuiltInCab()
+    {
+        Prepared prepared;
+        auto& p = prepared.proc;
+        setParam (p, "COMP_ON", 0.0f);
+        setParam (p, "OD_ON", 0.0f);
+        setParam (p, "DRIVE", 1.0f);
+        setParam (p, "MASTER", 10.0f);
+
+        check (p.loadedIrFile == juce::File(), "a new processor has no IR file of its own");
+        check (waitForIr (p), "the built-in cabinet is loaded into the convolution engine");
+
+        auto level = [&] (float hz)
+        {
+            auto out = run (p, 12, [hz] (int block, juce::AudioBuffer<float>& buf)
+            {
+                for (int i = 0; i < buf.getNumSamples(); ++i)
+                {
+                    const float v = 0.02f * std::sin (juce::MathConstants<float>::twoPi * hz * (float) (block * blockSize + i) / (float) sampleRate);
+                    buf.setSample (0, i, v);
+                    buf.setSample (1, i, v);
+                }
+            });
+            return rms (out, 0, 6 * blockSize);
+        };
+
+        const float mid = level (500.0f), high = level (8000.0f), low = level (40.0f);
+        check (mid > 1.0e-4f, "the built-in cabinet passes the mids (rms " + juce::String (mid, 5) + ")");
+        check (high < mid * 0.35f, "the built-in cabinet rolls off 8 kHz (ratio " + juce::String (high / mid, 3) + ")");
+        check (low < mid * 0.5f, "the built-in cabinet cuts 40 Hz (ratio " + juce::String (low / mid, 3) + ")");
+
+        // a preset without an IR goes back to the built-in cabinet
+        auto irFile = writeEchoIr (100);
+        p.loadImpulseResponse (irFile);
+        check (p.loadedIrFile == irFile, "a user IR replaces the built-in cabinet");
+        p.loadPreset (0);
+        check (p.loadedIrFile == juce::File(), "a preset without an IR returns to the built-in cabinet");
+        irFile.deleteFile();
+
+        // a session without an IR path does the same
+        juce::MemoryBlock saved;
+        p.getStateInformation (saved);
+        Prepared other;
+        auto irFile2 = writeEchoIr (100);
+        other.proc.loadImpulseResponse (irFile2);
+        other.proc.setStateInformation (saved.getData(), (int) saved.getSize());
+        check (other.proc.loadedIrFile == juce::File(), "a session without an IR returns to the built-in cabinet");
+        irFile2.deleteFile();
+    }
     void testStateRoundTrip()
     {
         const int delay = 100;
@@ -174,13 +256,6 @@ namespace
         check (waitForIr (b.proc), "state reloads the IR into the convolution engine");
 
         irFile.deleteFile();
-    }
-    float rms (const juce::AudioBuffer<float>& buf, int channel, int from)
-    {
-        double sum = 0.0;
-        for (int i = from; i < buf.getNumSamples(); ++i)
-            sum += (double) buf.getSample (channel, i) * buf.getSample (channel, i);
-        return (float) std::sqrt (sum / (buf.getNumSamples() - from));
     }
 
     void testEqProcessesBothChannels()
@@ -1647,6 +1722,7 @@ int main (int argc, char** argv)
     }
 
     testIrIsApplied();
+    testBuiltInCab();
     testStateRoundTrip();
     testEqProcessesBothChannels();
     testCompressor();

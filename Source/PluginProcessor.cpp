@@ -9,6 +9,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "LibraryPaths.h"
+#include "DSP/DefaultCab.h"
 
 //==============================================================================
 NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
@@ -24,6 +25,7 @@ NeuralFlowAmpAudioProcessor::NeuralFlowAmpAudioProcessor()
 #endif
 {
 	formatManager.registerBasicFormats();
+	useBuiltInCab();
 
     ampTypeParam = apvts.getRawParameterValue("AMP_TYPE");
     namInParam   = apvts.getRawParameterValue("NAM_IN");
@@ -523,8 +525,11 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
     PresetManager::applyValues (preset, apvts);
     setChainOrder (preset.order);
 
-    if (preset.irPath.isNotEmpty())
-        loadImpulseResponse (juce::File (preset.irPath));   // ignored if the file is gone
+    // a preset without an IR (or whose file is gone) uses the built-in cab
+    if (juce::File (preset.irPath).existsAsFile())
+        loadImpulseResponse (juce::File (preset.irPath));
+    else
+        useBuiltInCab();
 
     if (preset.namPath.isNotEmpty())
     {
@@ -675,6 +680,8 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
     const juce::File irFile(state.getProperty("irPath").toString());
     if (irFile.existsAsFile())
         loadImpulseResponse(irFile);
+    else
+        useBuiltInCab();
 
     // (a path from an older version may point into the old "Models" folder, now "Amps")
     const juce::File namFile = FileLibrary::resolveSaved(juce::File(state.getProperty("namPath").toString()));
@@ -824,4 +831,12 @@ void NeuralFlowAmpAudioProcessor::loadImpulseResponse(const juce::File& file) {
 		cabSimulator.loadImpulseResponse(file, juce::dsp::Convolution::Stereo::yes, juce::dsp::Convolution::Trim::yes, 0, juce::dsp::Convolution::Normalise::yes);
 		loadedIrFile = file;
 	}
+}
+
+void NeuralFlowAmpAudioProcessor::useBuiltInCab()
+{
+	// The convolution engine converts the 48 kHz buffer to the host rate itself.
+	cabSimulator.loadImpulseResponse(DefaultCab::makeBuffer(), DefaultCab::sampleRate, juce::dsp::Convolution::Stereo::no,
+	                                 juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::yes);
+	loadedIrFile = juce::File();
 }

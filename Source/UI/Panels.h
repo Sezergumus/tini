@@ -970,7 +970,7 @@ private:
         }
 
         cabTile.setDetail (processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getFileNameWithoutExtension()
-                                                                 : juce::String ("No IR"));
+                                                                 : juce::String ("Built-in"));
     }
 
     void setAdded (int item, bool added)

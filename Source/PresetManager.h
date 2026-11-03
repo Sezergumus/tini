@@ -19,7 +19,7 @@ public:
         bool factory = false;
         std::map<juce::String, float> values;   // parameter id -> plain value; missing = parameter default
         PedalCatalog::ChainOrder order = PedalCatalog::defaultOrder();
-        juce::String irPath;                    // empty = leave the current IR alone
+        juce::String irPath;                    // empty = the built-in cabinet
         juce::String namPath;                   // empty = leave the current NAM model alone
         std::array<juce::String, PedalCatalog::namCopies> capturePaths;   // NAM pedal models, per copy; empty = no model
         juce::File file;                        // user presets only
