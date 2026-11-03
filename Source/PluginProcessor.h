@@ -97,11 +97,6 @@ public:
     void loadNamModel(const juce::File& file);   // background load, see nam.getStatus()
     void unloadNamModel();
 
-    /** Full / Lite size of an A2 model (NAM_QUALITY). Reloads the model, as the size cannot be
-        switched while audio runs. Message thread. */
-    void setNamLite(bool lite);
-    bool isNamLite() const;
-
     juce::dsp::Convolution cabSimulator;
     juce::AudioFormatManager formatManager;
 private:

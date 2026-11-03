@@ -664,93 +664,47 @@ namespace
     //==========================================================================
     void testNamA2()
     {
-        std::printf ("\n-- NAM A2 (slimmable) --\n");
+        std::printf ("\n-- NAM A2 --\n");
         const int from = 20 * blockSize;
         const auto a2 = juce::File (__FILE__).getParentDirectory().getChildFile ("models").getChildFile ("test_a2.nam");
         check (a2.existsAsFile(), "the A2 test model file is there");
 
-        auto useA2 = [&] (auto& p, bool lite)
+        // An A2 file (a slimmable container with a Lite and a Full network) loads and sounds sane.
+        juce::AudioBuffer<float> out;
         {
-            setParam (p, "AMP_TYPE", 1.0f);
-            setParam (p, "NAM_QUALITY", lite ? 1.0f : 0.0f);
-            p.loadNamModel (a2);
-            return waitForNam (p);
-        };
-
-        // It loads as a slimmable model, Full by default.
-        {
-            Prepared prepared;
-            const bool loaded = useA2 (prepared.proc, false);
-            const auto info = prepared.proc.nam.getModelInfo();
-            check (loaded && info.slimmable && ! info.lite && info.trainingRate == 48000.0 && info.hasLoudness,
-                   "A2 loads as a slimmable model at Full size (" + info.name + ", " + juce::String (info.loudnessDb, 1) + " dB)");
-        }
-
-        // Full and Lite are different networks: both sound sane, and they differ.
-        juce::AudioBuffer<float> full, lite;
-        {
-            full = sineThrough (0.1f, [&] (auto& p) { useA2 (p, false); });
-            lite = sineThrough (0.1f, [&] (auto& p)
+            bool loaded = false;
+            out = sineThrough (0.1f, [&] (auto& p)
             {
-                const bool ok = useA2 (p, true);
-                check (ok && p.nam.getModelInfo().lite, "the Lite size is selected through NAM_QUALITY");
+                setParam (p, "AMP_TYPE", 1.0f);
+                p.loadNamModel (a2);
+                loaded = waitForNam (p);
+
+                const auto info = p.nam.getModelInfo();
+                check (info.trainingRate == 48000.0 && info.hasLoudness && ! info.resampled,
+                       "A2 model info is read (" + info.name + ", " + juce::String (info.loudnessDb, 1) + " dB)");
             });
-            check (allFinite (full) && allFinite (lite) && rms (full, 0, from) > 1.0e-4f && rms (lite, 0, from) > 1.0e-4f,
-                   "A2 Full and Lite both produce a finite, audible signal");
-            check (differenceRms (full, lite, from) > 0.01f * rms (full, 0, from), "Full and Lite are different networks");
+            check (loaded, "an A2 model loads");
+            check (allFinite (out) && rms (out, 0, from) > 1.0e-4f, "an A2 model produces a finite, audible signal");
         }
 
-        // Switching the size while a model is loaded reloads it.
+        // A2 runs at another host rate too.
         {
-            Prepared prepared;
-            auto& p = prepared.proc;
-            useA2 (p, false);
-
-            p.setNamLite (true);
-            check (waitForNam (p) && p.nam.getModelInfo().lite && p.isNamLite(), "setNamLite (true) reloads the model at Lite size");
-            p.setNamLite (false);
-            check (waitForNam (p) && ! p.nam.getModelInfo().lite && ! p.isNamLite(), "setNamLite (false) goes back to Full");
-        }
-
-        // The size is part of the state and of presets.
-        {
-            juce::MemoryBlock saved;
-            {
-                Prepared a;
-                useA2 (a.proc, true);
-                a.proc.getStateInformation (saved);
-            }
-            Prepared b;
-            b.proc.setStateInformation (saved.getData(), (int) saved.getSize());
-            check (waitForNam (b.proc) && b.proc.nam.getModelInfo().lite, "state restores the Lite size");
-        }
-        {
-            auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("nfa_a2_preset_test");
-            folder.deleteRecursively();
-
-            Prepared a;
-            a.proc.presets.setUserFolder (folder);
-            useA2 (a.proc, true);
-            a.proc.saveCurrentAsPreset ("Lite Tone");
-
-            a.proc.setNamLite (false);
-            waitForNam (a.proc);
-            check (! a.proc.nam.getModelInfo().lite, "(the model is back at Full before loading the preset)");
-
-            a.proc.loadPreset (a.proc.presets.indexOf ("Lite Tone"));
-            check (waitForNam (a.proc) && a.proc.nam.getModelInfo().lite, "loading a preset restores the Lite size");
-            folder.deleteRecursively();
+            NeuralFlowAmpAudioProcessor p;
+            p.setRateAndBufferSizeDetails (44100.0, 512);
+            p.prepareToPlay (44100.0, 512);
+            setParam (p, "AMP_TYPE", 1.0f);
+            p.loadNamModel (a2);
+            check (waitForNam (p) && p.nam.getModelInfo().resampled, "an A2 model is resampled at 44.1 kHz");
         }
 
         // How much of the real-time budget a block takes. Machine dependent: only a loose limit is
-        // enforced, the numbers are printed so Full / Lite can be compared.
+        // enforced, the numbers are printed.
         {
-            auto budgetUsed = [&] (bool liteSize, const juce::File& model)
+            auto budgetUsed = [&] (const juce::File& model)
             {
                 Prepared prepared;
                 auto& p = prepared.proc;
                 setParam (p, "AMP_TYPE", 1.0f);
-                setParam (p, "NAM_QUALITY", liteSize ? 1.0f : 0.0f);
                 p.loadNamModel (model);
                 waitForNam (p);
 
@@ -762,11 +716,10 @@ namespace
                 return ms / (1000.0 * blocks * blockSize / sampleRate);
             };
 
-            const double a2Full = budgetUsed (false, a2), a2Lite = budgetUsed (true, a2), a1 = budgetUsed (false, testModel());
-            std::printf ("    whole plugin, NAM amp, 512 samples @ 48 kHz: A2 Full %.1f %%, A2 Lite %.1f %%, small A1 example %.1f %% of real time\n",
-                         a2Full * 100.0, a2Lite * 100.0, a1 * 100.0);
-            check (a2Full < 0.5, "A2 Full uses less than half of the real-time budget");
-            check (a2Lite < a2Full, "A2 Lite is cheaper than A2 Full");
+            const double a2Used = budgetUsed (a2), a1Used = budgetUsed (testModel());
+            std::printf ("    whole plugin, NAM amp, 512 samples @ 48 kHz: A2 %.1f %%, small A1 example %.1f %% of real time\n",
+                         a2Used * 100.0, a1Used * 100.0);
+            check (a2Used < 0.5, "an A2 model uses less than half of the real-time budget");
         }
     }
 
