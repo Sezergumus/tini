@@ -8,6 +8,7 @@
 #include "PresetBar.h"
 #include "HeaderButtons.h"
 #include "SettingsPage.h"
+#include "TunerView.h"
 #include "../StandaloneHooks.h"
 
 /** The whole UI, laid out in a fixed design space (Theme::designWidth x designHeight).
@@ -44,7 +45,12 @@ public:
                 addAndMakeVisible (b);
         }
 
-        blocks.onOverlayChanged = [this] { gearButton.setToggleState (blocks.getOverlayKind() == BlockEditor::Overlay::settings, juce::dontSendNotification); };
+        footer.onTunerClicked = [this] { toggleTuner(); };
+        blocks.onOverlayChanged = [this]
+        {
+            gearButton.setToggleState (blocks.getOverlayKind() == BlockEditor::Overlay::settings, juce::dontSendNotification);
+            footer.setTunerOpen (blocks.getOverlayKind() == BlockEditor::Overlay::tuner);
+        };
 
         chain.onSelect = [this] (int block) { blocks.show (block); };
         blocks.show (chain.getSelected());
@@ -127,6 +133,15 @@ public:
             blocks.closeOverlay();
         else
             blocks.showOverlay (std::make_unique<SettingsPage> (processor), BlockEditor::Overlay::settings);
+    }
+
+    /** Opens the tuner in place of the block page (the footer button), or closes it again. */
+    void toggleTuner()
+    {
+        if (blocks.getOverlayKind() == BlockEditor::Overlay::tuner)
+            blocks.closeOverlay();
+        else
+            blocks.showOverlay (std::make_unique<TunerView> (processor), BlockEditor::Overlay::tuner);
     }
 
     GearButton& getGearButton() { return gearButton; }

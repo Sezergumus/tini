@@ -711,6 +711,99 @@ void renderUiSnapshots (const juce::File& dir)
     }
 
     //==========================================================================
+    // Tuner: the footer button opens it, the processor collects input only while it is open.
+    if (auto* view = findFirst<MainView> (*editor))
+    {
+        auto& blocks2 = view->getBlocks();
+        auto& footer = view->getFooter();
+
+        // feeds a sine of `freq` straight into the processor, continuing the phase between calls
+        long position = 0;
+        auto feedTone = [&] (double freq, int numBlocks)
+        {
+            juce::MidiBuffer midi;
+            for (int b = 0; b < numBlocks; ++b)
+            {
+                juce::AudioBuffer<float> buf (2, 512);
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float v = 0.25f * (float) std::sin (juce::MathConstants<double>::twoPi * freq * (double) (position + i) / 48000.0);
+                    buf.setSample (0, i, v);
+                    buf.setSample (1, i, v);
+                }
+                position += 512;
+                p.processBlock (buf, midi);
+            }
+        };
+
+        report (! p.isTunerActive(), "the tuner is off at first");
+
+        footer.getTunerButton().triggerClick();
+        settleLoop (100);
+        auto* tuner = dynamic_cast<TunerView*> (blocks2.getOverlay());
+        report (tuner != nullptr && blocks2.getOverlayKind() == BlockEditor::Overlay::tuner, "the Tuner button opens the tuner");
+        report (p.isTunerActive(), "...and switches the tuner input on");
+        report (footer.getTunerButton().getToggleState(), "...and the button stays lit");
+        report (! blocks2.getAmpPage().isVisible(), "...and the block page steps aside");
+
+        if (tuner != nullptr)
+        {
+            save (*editor, dir.getChildFile ("ui_tuner_idle.png"));
+            report (! tuner->hasPitch(), "without sound the tuner shows no note");
+
+            for (int i = 0; i < 6; ++i)
+            {
+                feedTone (196.0, 3);
+                settleLoop (40);
+            }
+            settleLoop (200);
+            report (tuner->hasPitch() && tuner->getNoteName() == "G" && tuner->getOctave() == 3, "a 196 Hz string shows G3: " + tuner->getNoteName() + juce::String (tuner->getOctave()));
+            report (std::abs (tuner->getCents()) < 2.0f && tuner->isInTune(), "...in tune (" + juce::String (tuner->getCents(), 2) + " cents)");
+            report (std::abs (tuner->getFrequency() - 196.0f) < 0.5f, "...at " + juce::String (tuner->getFrequency(), 2) + " Hz");
+            save (*editor, dir.getChildFile ("ui_tuner_in_tune.png"));
+
+            // 25 cents flat of A2
+            const double flatA = 110.0 * std::pow (2.0, -25.0 / 1200.0);
+            for (int i = 0; i < 8; ++i)
+            {
+                feedTone (flatA, 3);
+                settleLoop (40);
+            }
+            settleLoop (200);
+            report (tuner->getNoteName() == "A" && tuner->getOctave() == 2 && std::abs (tuner->getCents() + 25.0f) < 3.0f && ! tuner->isInTune(),
+                    "a flat string shows its note and how far off it is: " + tuner->getNoteName() + juce::String (tuner->getOctave()) + " " + juce::String (tuner->getCents(), 1));
+            save (*editor, dir.getChildFile ("ui_tuner_flat.png"));
+
+            tuner->getMuteSwitch().triggerClick();
+            settleLoop (50);
+            report (p.isTunerMuted(), "the Mute switch mutes the output");
+            save (*editor, dir.getChildFile ("ui_tuner_muted.png"));
+
+            // the string stops: after a moment the note goes away
+            settleLoop (1800);
+            report (! tuner->hasPitch(), "the note goes away once the sound has stopped");
+        }
+
+        // a click on a block closes the tuner and switches everything off
+        view->getChain().select (PedalCatalog::ampItem);
+        settleLoop (100);
+        report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && blocks2.getAmpPage().isVisible(), "clicking a block closes the tuner");
+        report (! p.isTunerActive() && ! p.isTunerMuted(), "...switches the tuner input off and lifts the mute");
+        report (! footer.getTunerButton().getToggleState(), "...and the Tuner button is not lit any more");
+
+        // the button closes it too
+        footer.getTunerButton().triggerClick();
+        settleLoop (100);
+        footer.getTunerButton().triggerClick();
+        settleLoop (100);
+        report (blocks2.getOverlayKind() == BlockEditor::Overlay::none && ! p.isTunerActive(), "the Tuner button toggles the tuner");
+    }
+    else
+    {
+        report (false, "the editor has a main view for the tuner");
+    }
+
+    //==========================================================================
     // Settings page: opened by the gear, closed by the gear or a block.
     if (auto* view = findFirst<MainView> (*editor))
     {
