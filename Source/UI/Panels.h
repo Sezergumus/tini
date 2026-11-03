@@ -363,6 +363,19 @@ public:
         for (auto* b : { &loadButton, &clearButton, &levelButton })
             addAndMakeVisible (b);
 
+        // size of an A2 model (only shown for models that have one)
+        fullButton.setButtonText ("FULL");
+        liteButton.setButtonText ("LITE");
+        fullButton.setTooltip ("Highest quality");
+        liteButton.setTooltip ("Smaller network: less CPU, slightly less accurate");
+        fullButton.onClick = [this] { processor.setNamLite (false); refresh(); };
+        liteButton.onClick = [this] { processor.setNamLite (true);  refresh(); };
+        for (auto* b : { &fullButton, &liteButton })
+        {
+            b->setClickingTogglesState (false);
+            addChildComponent (b);
+        }
+
         refresh();
     }
 
@@ -383,7 +396,8 @@ public:
             case State::failed:  name = processor.nam.getFile().getFileName(); detail = "COULD NOT LOAD: " + status.message.upToFirstOccurrenceOf ("\n", false, false); break;
             case State::ready:
                 name = info.name;
-                detail = (info.trainingRate > 0.0 ? juce::String (info.trainingRate / 1000.0, 1) + " kHz" : juce::String ("? kHz"))
+                detail = (info.slimmable ? juce::String ("A2  |  ") : juce::String())
+                         + (info.trainingRate > 0.0 ? juce::String (info.trainingRate / 1000.0, 1) + " kHz" : juce::String ("? kHz"))
                          + (info.hasLoudness ? "  |  " + juce::String (info.loudnessDb, 1) + " dB" : juce::String())
                          + (info.resampled ? "  |  RESAMPLED" : juce::String());
                 break;
@@ -397,9 +411,20 @@ public:
         else if (status.state == State::failed)      { statusText = "MODEL ERROR"; }
         else                                         { statusText = "NO MODEL"; }
 
-        const bool changed = namMode != shownNamMode || name != modelName || detail != modelDetail || statusText != shownStatus;
+        const bool slimmable = status.state != State::empty && status.state != State::failed && info.slimmable;
+        const bool lite = processor.isNamLite();
+
+        const bool changed = namMode != shownNamMode || name != modelName || detail != modelDetail || statusText != shownStatus
+                          || slimmable != shownSlimmable || lite != shownLite;
         if (! changed)
             return;
+
+        shownSlimmable = slimmable;
+        shownLite = lite;
+        fullButton.setVisible (slimmable);
+        liteButton.setVisible (slimmable);
+        fullButton.setToggleState (! lite, juce::dontSendNotification);
+        liteButton.setToggleState (lite, juce::dontSendNotification);
 
         shownNamMode = namMode;
         modelName = name;
@@ -423,12 +448,12 @@ public:
         Theme::drawInset (g, knobArea.toFloat(), 8.0f);
         Theme::drawInset (g, modelCard.toFloat(), 8.0f);
 
-        auto text = modelCard.reduced (14, 8).withTrimmedRight (buttonsWidth + 10);
+        auto text = modelCard.reduced (14, 8).removeFromTop (38).withTrimmedRight (shownSlimmable ? sizeButtonsWidth + 10 : 0);
         const bool hasModel = processor.nam.getStatus().state != NamEngine::Status::State::empty;
 
         g.setColour (hasModel ? Theme::textHi : Theme::textLo);
         g.setFont (Theme::mono (12.5f));
-        g.drawText (modelName, text.removeFromTop (text.getHeight() / 2 + 2), juce::Justification::centredLeft, true);
+        g.drawText (modelName, text.removeFromTop (22), juce::Justification::centredLeft, true);
 
         g.setColour (modelDetail.startsWith ("COULD NOT") ? Theme::amber : Theme::textLo);
         g.setFont (Theme::ui (9.0f, true, 0.12f));
@@ -446,11 +471,15 @@ public:
         knobArea = b.removeFromRight (juce::roundToInt ((float) b.getWidth() * 0.50f));
         b.removeFromRight (16);
 
-        modelCard = b.removeFromBottom (58);
+        modelCard = b.removeFromBottom (82);
         b.removeFromBottom (10);
         scope.setBounds (b);
 
-        auto buttons = modelCard.reduced (12, 0).withSizeKeepingCentre (modelCard.getWidth() - 24, 28);
+        auto sizeRow = juce::Rectangle<int> (sizeButtonsWidth, 24).withRightX (modelCard.getRight() - 12).withY (modelCard.getY() + 10);
+        liteButton.setBounds (sizeRow.removeFromRight (sizeButtonsWidth / 2));
+        fullButton.setBounds (sizeRow);
+
+        auto buttons = modelCard.reduced (12, 0).removeFromBottom (36).removeFromTop (28);
         clearButton.setBounds (buttons.removeFromRight (56));
         buttons.removeFromRight (6);
         levelButton.setBounds (buttons.removeFromRight (100));
@@ -470,11 +499,11 @@ public:
     WaveformView scope;
 
     // exposed so tests can drive them
-    juce::TextButton builtInButton, namButton, loadButton, clearButton;
+    juce::TextButton builtInButton, namButton, loadButton, clearButton, fullButton, liteButton;
     juce::TextButton levelButton;
 
 private:
-    static constexpr int buttonsWidth = 92 + 100 + 56 + 12;
+    static constexpr int sizeButtonsWidth = 2 * 54;
 
     void setAmpType (int type)
     {
@@ -515,7 +544,7 @@ private:
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> levelAttachment;
 
-    bool shownNamMode = false;
+    bool shownNamMode = false, shownSlimmable = false, shownLite = false;
     juce::String modelName, modelDetail, shownStatus;
 };
 

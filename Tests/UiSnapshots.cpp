@@ -336,6 +336,39 @@ void renderUiSnapshots (const juce::File& dir)
         report (p.nam.getStatus().state == NamEngine::Status::State::ready && p.nam.hasModel(), "a model loads while the UI is running");
         save (*editor, dir.getChildFile ("ui_amp_nam_loaded.png"));
 
+        report (! lead->liteButton.isVisible() && ! lead->fullButton.isVisible(), "a model without sizes shows no FULL / LITE switch");
+
+        // an A2 model has two sizes
+        {
+            const auto a2 = juce::File (__FILE__).getParentDirectory().getChildFile ("models").getChildFile ("test_a2.nam");
+            p.loadNamModel (a2);
+            for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+                settleLoop (10);
+            settle();
+            report (lead->fullButton.isVisible() && lead->liteButton.isVisible() && lead->fullButton.getToggleState(),
+                    "an A2 model shows the FULL / LITE switch, Full selected");
+            save (*editor, dir.getChildFile ("ui_amp_nam_a2.png"));
+
+            lead->liteButton.triggerClick();
+            for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+                settleLoop (10);
+            settle();
+            report (p.isNamLite() && p.nam.getModelInfo().lite && lead->liteButton.getToggleState() && ! lead->fullButton.getToggleState(),
+                    "LITE reloads the model at the smaller size");
+            save (*editor, dir.getChildFile ("ui_amp_nam_a2_lite.png"));
+
+            lead->fullButton.triggerClick();
+            for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+                settleLoop (10);
+            settle();
+            report (! p.isNamLite() && ! p.nam.getModelInfo().lite, "FULL goes back to the full size");
+
+            p.loadNamModel (model);   // back to the plain model for the checks below
+            for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+                settleLoop (10);
+            settle();
+        }
+
         const float levelBefore = p.apvts.getRawParameterValue ("NAM_NORM")->load();
         lead->levelButton.triggerClick();
         settleLoop (50);
