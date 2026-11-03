@@ -441,6 +441,8 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
 
     if (preset.namPath.isNotEmpty() && juce::File (preset.namPath).existsAsFile())
         loadNamModel (juce::File (preset.namPath));
+    else if (nam.getFile().existsAsFile() && nam.getModelInfo().slimmable && nam.getModelInfo().lite != isNamLite())
+        loadNamModel (nam.getFile());   // same model, the preset wants the other size
 
     currentPresetName = preset.name;
     if (index < presets.getNumFactory())
@@ -589,6 +591,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
     params.push_back(std::make_unique<juce::AudioParameterFloat>("NAM_IN", "NAM Input", -24.0f, 24.0f, 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("NAM_OUT", "NAM Output", -24.0f, 24.0f, 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterBool>("NAM_NORM", "NAM Normalise", true));
+    // Size of an A2 model. Not automatable: changing it reloads the model on a background thread.
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("NAM_QUALITY", 1), "NAM Size", juce::StringArray { "Full", "Lite" }, 0,
+        juce::AudioParameterChoiceAttributes().withAutomatable(false)));
 
     // Pedals. Every pedal type exists maxCopies times; copy 0 keeps the plain ids, the others get a
     // "_2", "_3" suffix (see PedalCatalog::suffixedId). *_ADDED says whether a copy is in the chain
@@ -658,7 +664,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
 void NeuralFlowAmpAudioProcessor::loadNamModel(const juce::File& file)
 {
     if (file.existsAsFile())
-        nam.loadModel(file);
+        nam.loadModel(file, isNamLite() ? 0.0 : 1.0);
+}
+
+bool NeuralFlowAmpAudioProcessor::isNamLite() const
+{
+    return apvts.getRawParameterValue("NAM_QUALITY")->load() > 0.5f;
+}
+
+void NeuralFlowAmpAudioProcessor::setNamLite(bool lite)
+{
+    if (auto* param = apvts.getParameter("NAM_QUALITY"))
+    {
+        param->beginChangeGesture();
+        param->setValueNotifyingHost(lite ? 1.0f : 0.0f);
+        param->endChangeGesture();
+    }
+
+    const auto file = nam.getFile();
+    if (file.existsAsFile())
+        loadNamModel(file);
 }
 
 void NeuralFlowAmpAudioProcessor::unloadNamModel()

@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "NAM/get_dsp.h"
+#include "NAM/slimmable.h"
 
 /** Runs a Neural Amp Modeler (.nam) model inside the audio chain.
 
@@ -25,6 +26,8 @@ public:
         bool hasLoudness = false;
         double loudnessDb = 0.0;
         bool resampled = false;            // host rate differs from the training rate
+        bool slimmable = false;            // A2 files hold several sizes (Full / Lite) in one file
+        bool lite = false;                 // the smaller size is the one running
     };
 
     struct Status
@@ -59,27 +62,30 @@ public:
         maxBlock = juce::jmax (1, maxBlockSize);
 
         if (changed && currentFile.existsAsFile())
-            loadModel (currentFile);
+            loadModel (currentFile, currentSlimSize);
     }
 
-    /** Starts loading a model in the background. The previous model keeps playing until the new one is ready. */
-    void loadModel (const juce::File& file)
+    /** Starts loading a model in the background. The previous model keeps playing until the new one is
+        ready. `slimSize` picks the size of a slimmable (A2) file: 1.0 = Full, 0.0 = the smallest (Lite).
+        Switching the size at runtime is not real-time safe in the core, so it is done by loading again. */
+    void loadModel (const juce::File& file, double slimSize = 1.0)
     {
         const int gen = ++generation;
         currentFile = file;
+        currentSlimSize = slimSize;
         setStatus ({ Status::State::loading, {} });
 
         const double rate = hostRate.load();
         const int block = maxBlock.load();
 
-        loader.addJob ([this, file, gen, rate, block]
+        loader.addJob ([this, file, gen, rate, block, slimSize]
         {
             std::unique_ptr<Model> model;
             juce::String error;
 
             try
             {
-                model = Model::load (file, rate, block);
+                model = Model::load (file, rate, block, slimSize);
             }
             catch (const std::exception& e)
             {
@@ -204,7 +210,7 @@ private:
         juce::LagrangeInterpolator down, up;
         Model* nextRetired = nullptr;          // intrusive list of models waiting to be deleted
 
-        static std::unique_ptr<Model> load (const juce::File& file, double hostRate, int maxBlock)
+        static std::unique_ptr<Model> load (const juce::File& file, double hostRate, int maxBlock, double slimSize)
         {
             auto model = std::make_unique<Model>();
             model->hostRate = hostRate;
@@ -223,6 +229,16 @@ private:
             model->info.trainingRate = dsp.GetExpectedSampleRate();
             model->info.hasLoudness = dsp.HasLoudness();
             model->info.loudnessDb = model->info.hasLoudness ? dsp.GetLoudness() : 0.0;
+
+            if (auto* slim = dynamic_cast<nam::SlimmableModel*> (&dsp))
+            {
+                // Before Reset(), so that Reset() prepares (and prewarms) the size that will run.
+                slim->SetSlimmableSize (slimSize);
+
+                const auto breakpoints = slim->GetSlimmableSizeBreakpoints();
+                model->info.slimmable = ! breakpoints.empty();
+                model->info.lite = model->info.slimmable && slimSize < breakpoints.back();
+            }
 
             const bool knowsRate = model->info.trainingRate > 0.0;
             model->resample = knowsRate && ! dsp.SupportsArbitrarySampleRate()
@@ -331,6 +347,7 @@ private:
     Model* current = nullptr;                  // owned by the audio thread
 
     juce::File currentFile;                    // message thread
+    double currentSlimSize = 1.0;              // message thread
 
     juce::CriticalSection infoLock, publishLock;
     Status status;
