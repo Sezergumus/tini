@@ -533,15 +533,16 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
             loadNamModel (namFile);
     }
 
+    // every NAM pedal copy gets what the preset says: its model, or none
     for (int copy = 0; copy < PedalCatalog::namCopies; ++copy)
     {
         const auto& path = preset.capturePaths[(size_t) copy];
-        if (path.isNotEmpty())
-        {
-            const auto captureFile = FileLibrary::resolveSaved(juce::File(path));
-            if (captureFile.existsAsFile())
-                loadPedalModel(copy, captureFile);
-        }
+        const auto captureFile = path.isNotEmpty() ? FileLibrary::resolveSaved(juce::File(path)) : juce::File();
+
+        if (captureFile.existsAsFile())
+            loadPedalModel(copy, captureFile);
+        else
+            unloadPedalModel(copy);
     }
 
     currentPresetName = preset.name;

@@ -1079,7 +1079,8 @@ void renderUiSnapshots (const juce::File& dir)
             view->getChain().select (PedalCatalog::captureType);
             settleLoop (200);
             auto* page = blocks3.getPedalPage();
-            report (page != nullptr && page->getModelSlot() != nullptr && page->getBrowser() != nullptr, "the Capture pedal's page has a model slot and a list");
+            report (page != nullptr && page->getModelSlot() != nullptr && page->getBrowser() != nullptr, "the NAM pedal's page has a model slot and a list");
+            report (page != nullptr && page->getTitle() == "NAM Pedal", "an empty NAM pedal is called NAM Pedal");
             report (page != nullptr && page->getBrowser()->isVisible() && page->getBrowser()->getKind() == FileLibrary::Kind::pedals
                         && page->getBrowser()->getFolder() == pedalsFolder && page->getBrowser()->getNumFiles() == 2,
                     "...the list shows the Pedals folder");
@@ -1096,11 +1097,18 @@ void renderUiSnapshots (const juce::File& dir)
                         "picking a line loads the capture into this pedal");
                 report (! p.nam.hasModel(), "...and not into the amp");
 
-                bool tileShowsName = false;
+                bool tileNamed = false;
+                juce::String tileDetail;
                 for (auto* tile : view->getChain().getStrip().pedals)
                     if (tile->getItem() == PedalCatalog::captureType)
-                        tileShowsName = tile->getDetail().isNotEmpty() && tile->getDetail() != "No model";
-                report (tileShowsName, "the pedal's tile shows the model name");
+                    {
+                        tileNamed = tile->getTitle() == "Green Drive";
+                        tileDetail = tile->getDetail();
+                    }
+                report (tileNamed, "the pedal's tile is named after its model");
+                report (tileDetail == "Clean", "...and its second line is what the model says about itself (" + tileDetail + ")");
+                report (page->getTitle() == "Green Drive" && page->getCategory().contains ("Microtubes"),
+                        "the page carries the model's name and its gear (" + page->getTitle() + " / " + page->getCategory() + ")");
                 save (*editor, dir.getChildFile ("ui_page_capture.png"));
 
                 page->getModelSlot()->nextButton.triggerClick();

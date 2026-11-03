@@ -21,6 +21,22 @@ inline juce::Colour blockColour (int block)
 }
 
 //==============================================================================
+/** A NAM pedal is named after its model: the file name without its extension. Without a model it is
+    just "NAM Pedal". */
+inline juce::String namPedalName (NeuralFlowAmpAudioProcessor& p, int copy)
+{
+    const auto file = p.pedalNam[(size_t) copy].getFile();
+    return file == juce::File() ? juce::String ("NAM Pedal") : file.getFileNameWithoutExtension();
+}
+
+/** What the model of a NAM pedal says about itself (empty until the background read is done). */
+inline NamMetadata::Info namPedalInfo (NeuralFlowAmpAudioProcessor& p, int copy)
+{
+    const auto file = p.pedalNam[(size_t) copy].getFile();
+    return file.existsAsFile() ? p.metadata.get (file) : NamMetadata::Info();
+}
+
+//==============================================================================
 /** Small "x" that removes a pedal from the chain. */
 class RemoveButton : public juce::Button
 {
@@ -119,7 +135,8 @@ public:
 
         if (isPedal)
         {
-            title = Theme::titleCase (PedalCatalog::displayName (block));
+            title = PedalCatalog::typeOf (block) == PedalCatalog::captureType ? juce::String ("NAM Pedal")
+                                                                              : Theme::titleCase (PedalCatalog::displayName (block));
             activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, PedalCatalog::onId (block), dot);
             lastActive = isActive();
             updateDetail();
@@ -165,7 +182,18 @@ public:
         repaint();
     }
 
-    /** A pedal whose value line is not its first knob (the Capture pedal shows its model's name). */
+    /** A pedal that is named after something else than its type (the NAM pedal: its model). */
+    void setTitle (const juce::String& text)
+    {
+        if (title == text)
+            return;
+        title = text;
+        repaint();
+    }
+
+    const juce::String& getTitle() const { return title; }
+
+    /** A pedal whose value line is not its first knob (a NAM pedal shows what its model is). */
     void setCustomDetail (const juce::String& text)
     {
         customDetail = true;
@@ -930,6 +958,11 @@ private:
                 p->onRemove = [self = this, item]
                 {
                     self->setAdded (item, false);
+
+                    // a NAM pedal that leaves the chain lets go of its model
+                    if (PedalCatalog::typeOf (item) == PedalCatalog::captureType)
+                        self->processor.unloadPedalModel (PedalCatalog::copyOf (item));
+
                     juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ChainBar> (self)]
                     {
                         if (safe != nullptr)
@@ -976,18 +1009,29 @@ private:
 
         strip.getAmpTile().setDetail (amp);
 
-        // a Capture pedal shows the name of its model
+        // a NAM pedal carries the name of its model; under it, what the model is
         for (auto* tile : strip.pedals)
         {
             if (PedalCatalog::typeOf (tile->getItem()) != PedalCatalog::captureType)
                 continue;
 
-            const auto& engine = processor.pedalNam[(size_t) PedalCatalog::copyOf (tile->getItem())];
+            const int copy = PedalCatalog::copyOf (tile->getItem());
             using State = NamEngine::Status::State;
-            const auto state = engine.getStatus().state;
-            tile->setCustomDetail (state == State::ready   ? engine.getModelInfo().name
-                                   : state == State::loading ? juce::String ("Loading...")
-                                                             : juce::String ("No model"));
+
+            tile->setTitle (namPedalName (processor, copy));
+
+            switch (processor.pedalNam[(size_t) copy].getStatus().state)
+            {
+                case State::ready:
+                {
+                    const auto line = namPedalInfo (processor, copy).shortLine();
+                    tile->setCustomDetail (line.isNotEmpty() ? line : "Input " + juce::String (apvts.getRawParameterValue (PedalCatalog::knobId (tile->getItem(), 0))->load(), 1) + " dB");
+                    break;
+                }
+                case State::loading: tile->setCustomDetail ("Loading..."); break;
+                case State::failed:  tile->setCustomDetail ("Could not load"); break;
+                case State::empty:   tile->setCustomDetail ("No model"); break;
+            }
         }
 
         cabTile.setDetail (processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getFileNameWithoutExtension()

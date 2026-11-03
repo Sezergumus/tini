@@ -544,7 +544,8 @@ public:
 
 //==============================================================================
 /** A pedal: its name and category, the bypass switch and one knob per parameter, all in the colour
-    of the pedal's category. The Capture pedal also shows its model slot and the list of pedal captures. */
+    of the pedal's category. A NAM pedal is named after its model and also shows its model slot and the list
+    of pedal captures. */
 class PedalPage : public juce::Component
 {
 public:
@@ -556,6 +557,7 @@ public:
 
         const auto copy = PedalCatalog::copyOf (chainItem);
         auto& engine = processor.pedalNam[(size_t) copy];
+        owner = &processor;
 
         modelSlot = std::make_unique<ModelSlot> (processor,
             ModelTarget { engine,
@@ -587,6 +589,19 @@ public:
 
         modelSlot->refresh();
 
+        // the page carries the name of the model, and under it what the model says about itself
+        const int copy = PedalCatalog::copyOf (item);
+        const auto newTitle = namPedalName (*owner, copy);
+        const auto detail = namPedalInfo (*owner, copy).detailLine();
+        const auto newCategory = detail.isNotEmpty() ? detail : juce::String ("NAM model");
+
+        if (newTitle != title || newCategory != category)
+        {
+            title = newTitle;
+            category = newCategory;
+            repaint();
+        }
+
         const bool showBrowser = modelSlot->isBrowseOpen();
         if (browser->isVisible() != showBrowser)
             browser->setVisible (showBrowser);
@@ -603,7 +618,8 @@ public:
 
     PedalPage (int chainItem, juce::AudioProcessorValueTreeState& state)
         : item (chainItem), info (PedalCatalog::pedalOf (chainItem)),
-          title (Theme::titleCase (PedalCatalog::displayName (chainItem))),
+          title (PedalCatalog::typeOf (chainItem) == PedalCatalog::captureType ? juce::String ("NAM Pedal")
+                                                                               : Theme::titleCase (PedalCatalog::displayName (chainItem))),
           category (Theme::titleCase (info.category)),
           tint (blockColour (chainItem)), bypass (tint)
     {
@@ -622,6 +638,8 @@ public:
     }
 
     int getItem() const { return item; }
+    const juce::String& getTitle() const { return title; }
+    const juce::String& getCategory() const { return category; }
     ToggleSwitch& getBypass() { return bypass; }
 
     void paint (juce::Graphics& g) override
@@ -684,7 +702,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
     juce::OwnedArray<LabeledKnob> knobs;
 
-    // Capture pedal only
+    // NAM pedal only
+    NeuralFlowAmpAudioProcessor* owner = nullptr;
     std::unique_ptr<ModelSlot> modelSlot;
     std::unique_ptr<FileBrowserList> browser;
     NamEngine* captureEngine = nullptr;

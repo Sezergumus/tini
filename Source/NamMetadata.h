@@ -36,6 +36,14 @@ namespace NamMetadata
             return line;
         }
 
+        /** The short line of a tile: the tone type ("hi gain"), else the gear's model, else its make. */
+        juce::String shortLine() const
+        {
+            const auto tone = toneType.replaceCharacter ('_', ' ');
+            const auto line = tone.isNotEmpty() ? tone : model.isNotEmpty() ? model : make;
+            return line.substring (0, 1).toUpperCase() + line.substring (1);
+        }
+
         bool operator== (const Info& other) const
         {
             return found == other.found && name == other.name && gearType == other.gearType

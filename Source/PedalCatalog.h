@@ -16,7 +16,7 @@ namespace PedalCatalog
     /** Pedal types that existed when chain orders were first saved (before the Capture pedal). */
     constexpr int firstGenerationTypes = 7;
 
-    /** Type number of the Capture pedal (the last entry of all()). */
+    /** Type number of the NAM pedal (the last entry of all()). */
     constexpr int captureType = 7;
 
     /** How many copies of each built-in pedal type can be in the chain at once. Every copy has its own
@@ -92,6 +92,7 @@ namespace PedalCatalog
         bool postAmp;
         std::vector<Knob> knobs;
         const char* category;  // shown in the add-pedal menu
+        bool fromLibrary = false;   // not a built-in pedal: it is added from a file of the library (NAM pedal)
 
         bool isRemovable() const { return addedID != nullptr; }
     };
@@ -126,10 +127,11 @@ namespace PedalCatalog
               { { "SIZE",    "REVERB_SIZE", 0, " %" },  { "DAMP",    "REVERB_DAMP",  0, " %" },
                 { "MIX",     "REVERB_MIX",  0, " %" } }, "SPACE" },
 
-            // a Neural Amp Modeler capture of a pedal; the model is chosen on its page
-            { "CAPTURE",    "NAM PEDAL",      0xffe0825f, "CAP_ON",    "CAP_ADDED",    false,
+            // a Neural Amp Modeler capture of a pedal. In the chain it is named after its model, the name
+            // here is only what an empty one is called. (The ids keep "CAP" so older sessions still load.)
+            { "NAM PEDAL",  "NAM CAPTURE",    0xffe0825f, "CAP_ON",    "CAP_ADDED",    false,
               { { "INPUT",   "CAP_IN",    1, " dB" },   { "OUTPUT",  "CAP_OUT",   1, " dB" },
-                { "MIX",     "CAP_MIX",   0, " %" } }, "NAM MODEL" },
+                { "MIX",     "CAP_MIX",   0, " %" } }, "NAM MODEL", true },
         };
         jassert ((int) pedals.size() == count);
         return pedals;

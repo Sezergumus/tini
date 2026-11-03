@@ -6,6 +6,7 @@
 #include "DSP/NamEngine.h"
 #include "DSP/PitchDetector.h"
 #include "PedalCatalog.h"
+#include "NamMetadata.h"
 #include "PresetManager.h"
 
 //==============================================================================
@@ -115,6 +116,9 @@ public:
     std::array<NamEngine, PedalCatalog::namCopies> pedalNam;
     void loadPedalModel(int copy, const juce::File& file);
     void unloadPedalModel(int copy);
+
+    /** What the library files say about themselves (gear type, make, tone type), read in the background. */
+    NamMetadata::Cache metadata;
 
     juce::dsp::Convolution cabSimulator;
     juce::AudioFormatManager formatManager;
