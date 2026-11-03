@@ -23,6 +23,7 @@ public:
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
 
+        nameEditor.setOpaque (false);   // rounded corners
         nameEditor.setFont (Theme::ui (13.0f, true));
         nameEditor.setIndents (8, 0);
         nameEditor.setJustification (juce::Justification::centredLeft);

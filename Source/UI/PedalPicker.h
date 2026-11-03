@@ -48,6 +48,7 @@ public:
         library.isLoaded = [this] (const juce::File& file) { return inChain (file); };
         addAndMakeVisible (library);
 
+        searchBox.setOpaque (false);   // rounded corners
         searchBox.setTextToShowWhenEmpty ("Search pedals", Theme::textLo);
         searchBox.setFont (Theme::ui (13.0f));
         searchBox.setIndents (10, 7);

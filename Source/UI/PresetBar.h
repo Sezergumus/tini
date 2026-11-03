@@ -18,6 +18,7 @@ public:
     SavePresetPanel (NeuralFlowAmpAudioProcessor& p, const juce::String& suggestedName)
         : processor (p)
     {
+        nameEditor.setOpaque (false);   // rounded corners
         nameEditor.setFont (Theme::ui (14.0f));
         nameEditor.setJustification (juce::Justification::centredLeft);
         nameEditor.setIndents (10, 0);

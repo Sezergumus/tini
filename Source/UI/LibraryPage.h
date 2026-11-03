@@ -99,6 +99,7 @@ public:
         list.onAdded = [this] (const juce::Array<juce::File>&) { countFiles(); };
         addAndMakeVisible (list);
 
+        searchBox.setOpaque (false);   // rounded corners
         searchBox.setTextToShowWhenEmpty ("Search", Theme::textLo);
         searchBox.setFont (Theme::ui (13.0f));
         searchBox.setIndents (10, 7);

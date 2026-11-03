@@ -41,6 +41,43 @@ public:
     }
 
     //==========================================================================
+    // Text boxes (search, rename, typed knob values): the same soft corners as the buttons.
+    // An editor drawn with this must not be opaque (setOpaque (false)), or its corners stay unpainted.
+    static constexpr float editorRadius = 6.0f;
+
+    void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
+    {
+        if (dynamic_cast<juce::AlertWindow*> (editor.getParentComponent()) != nullptr)
+        {
+            LookAndFeel_V4::fillTextEditorBackground (g, width, height, editor);
+            return;
+        }
+
+        g.setColour (editor.findColour (juce::TextEditor::backgroundColourId));
+        g.fillRoundedRectangle (0.0f, 0.0f, (float) width, (float) height, editorRadius);
+    }
+
+    void drawTextEditorOutline (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
+    {
+        if (dynamic_cast<juce::AlertWindow*> (editor.getParentComponent()) != nullptr)
+        {
+            LookAndFeel_V4::drawTextEditorOutline (g, width, height, editor);
+            return;
+        }
+
+        if (! editor.isEnabled())
+            return;
+
+        const bool focused = editor.hasKeyboardFocus (true) && ! editor.isReadOnly();
+        const float thickness = focused ? 1.5f : 1.0f;
+
+        g.setColour (editor.findColour (focused ? juce::TextEditor::focusedOutlineColourId
+                                                : juce::TextEditor::outlineColourId));
+        g.drawRoundedRectangle (juce::Rectangle<float> ((float) width, (float) height).reduced (thickness * 0.5f),
+                                editorRadius, thickness);
+    }
+
+    //==========================================================================
     // Call-out bubbles (the add-pedal popover): flat card, thin border, soft shadow, arrow.
     void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g, const juce::Path& path, juce::Image&) override
     {

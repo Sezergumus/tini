@@ -25,6 +25,29 @@ public:
         g.setFont (getFont());
         g.drawText (getText(), getLocalBounds(), juce::Justification::centred, false);
     }
+
+    /** The typing box: the app's own text box (rounded, inset, accent outline) in the label's font,
+        text centred under the knob. Not taken from the label's colours (which dim while idle). */
+    juce::TextEditor* createEditorComponent() override
+    {
+        auto* editor = new juce::TextEditor (getName());
+        editor->setOpaque (false);
+        editor->setBorder ({});
+        editor->setIndents (4, 0);
+        editor->setJustification (juce::Justification::centred);
+        editor->setFont (getFont());
+        editor->applyFontToAllText (getFont());
+        return editor;
+    }
+
+    void resized() override
+    {
+        juce::Label::resized();
+
+        // a value is short: a compact box in the middle instead of the whole caption row
+        if (auto* editor = getCurrentTextEditor())
+            editor->setBounds (getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth(), 76), getHeight()));
+    }
 };
 
 //==============================================================================
