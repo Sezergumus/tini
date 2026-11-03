@@ -110,6 +110,12 @@ public:
     void loadNamModel(const juce::File& file);   // background load, see nam.getStatus()
     void unloadNamModel();
 
+    /** The Capture pedal's models: one engine per pedal copy (index = copy), each loaded on its own
+        background thread. A copy without a loaded model passes the signal through. */
+    std::array<NamEngine, PedalCatalog::maxCopies> pedalNam;
+    void loadPedalModel(int copy, const juce::File& file);
+    void unloadPedalModel(int copy);
+
     juce::dsp::Convolution cabSimulator;
     juce::AudioFormatManager formatManager;
 private:

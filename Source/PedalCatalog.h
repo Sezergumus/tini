@@ -9,8 +9,12 @@
     (before or after the amp), and that order is kept by the processor (see ChainOrder). */
 namespace PedalCatalog
 {
-    /** Number of pedal types in all(). */
-    constexpr int count = 7;
+    /** Number of pedal types in all(). New types are only ever appended, so item numbers of older types
+        keep their meaning inside one copy; a new type does change numItems (see orderFromString). */
+    constexpr int count = 8;
+
+    /** Pedal types that existed when chain orders were first saved (before the Capture pedal). */
+    constexpr int firstGenerationTypes = 7;
 
     /** How many copies of each pedal type can be in the chain at once. Every copy has its own
         parameters, created up front (copy 0 keeps the plain ids, copy n >= 1 gets a "_<n+1>"
@@ -50,54 +54,6 @@ namespace PedalCatalog
         for (int item : order)
             parts.add (juce::String (item));
         return parts.joinIntoString (",");
-    }
-
-    /** Parses orderToString output. Returns false (and leaves `out` alone) if it is not a valid order. */
-    inline bool orderFromString (const juce::String& text, ChainOrder& out)
-    {
-        juce::StringArray parts;
-        parts.addTokens (text, ",", "");
-        parts.removeEmptyStrings();
-
-        if (parts.size() != numItems)
-            return false;
-
-        ChainOrder parsed {};
-        for (int i = 0; i < numItems; ++i)
-            parsed[(size_t) i] = parts[i].getIntValue();
-
-        if (! isValidOrder (parsed))
-            return false;
-
-        out = parsed;
-        return true;
-    }
-
-    /** Orders saved by version 1 packed 8 items (7 pedals + the amp as item 7) at 4 bits each into
-        one integer. Converts such a value; items that did not exist back then are parked at the end. */
-    inline bool orderFromLegacy (juce::uint32 packed, ChainOrder& out)
-    {
-        constexpr int legacyItems = count + 1;
-        ChainOrder converted {};
-        juce::uint32 seen = 0;
-        size_t n = 0;
-
-        for (int i = 0; i < legacyItems; ++i)
-        {
-            const int old = (int) ((packed >> (4 * i)) & 0xfu);
-            if (old >= legacyItems || (seen & (1u << old)) != 0)
-                return false;
-
-            seen |= 1u << old;
-            converted[n++] = old == count ? ampItem : old;
-        }
-
-        for (int item = 0; item < numItems; ++item)
-            if (std::find (converted.begin(), converted.begin() + (long) n, item) == converted.begin() + (long) n)
-                converted[n++] = item;
-
-        out = converted;
-        return isValidOrder (out);
     }
 
     struct Knob
@@ -151,29 +107,31 @@ namespace PedalCatalog
             { "REVERB",     "ROOM / HALL",    0xff4be3c1, "REVERB_ON", "REVERB_ADDED", true,
               { { "SIZE",    "REVERB_SIZE", 0, " %" },  { "DAMP",    "REVERB_DAMP",  0, " %" },
                 { "MIX",     "REVERB_MIX",  0, " %" } }, "SPACE" },
+
+            // a Neural Amp Modeler capture of a pedal; the model is chosen on its page
+            { "CAPTURE",    "NAM PEDAL",      0xffe0825f, "CAP_ON",    "CAP_ADDED",    false,
+              { { "INPUT",   "CAP_IN",    1, " dB" },   { "OUTPUT",  "CAP_OUT",   1, " dB" },
+                { "MIX",     "CAP_MIX",   0, " %" } }, "CAPTURE" },
         };
         jassert ((int) pedals.size() == count);
         return pedals;
     }
 
-    /** Where the chain starts out: catalog order, with the amp just before the first post-amp pedal. */
+    /** Where the chain starts out: the pre-amp pedals in catalog order, the amp, then the post-amp pedals. */
     inline ChainOrder defaultOrder()
     {
         ChainOrder order {};
         int n = 0;
-        bool ampPlaced = false;
 
         for (int i = 0; i < count; ++i)
-        {
-            if (! ampPlaced && all()[(size_t) i].postAmp)
-            {
-                order[(size_t) n++] = ampItem;
-                ampPlaced = true;
-            }
-            order[(size_t) n++] = i;
-        }
-        if (! ampPlaced)
-            order[(size_t) n++] = ampItem;
+            if (! all()[(size_t) i].postAmp)
+                order[(size_t) n++] = i;
+
+        order[(size_t) n++] = ampItem;
+
+        for (int i = 0; i < count; ++i)
+            if (all()[(size_t) i].postAmp)
+                order[(size_t) n++] = i;
 
         // extra copies start out parked at the end
         for (int copy = 1; copy < maxCopies; ++copy)
@@ -181,6 +139,106 @@ namespace PedalCatalog
                 order[(size_t) n++] = makeItem (i, copy);
 
         return order;
+    }
+
+    //==========================================================================
+    // Reading orders written by older versions
+
+    /** Completes an order made of valid, distinct items: pedal types the old order did not know are added.
+        Copy 0 of a new pre-amp pedal goes right before the amp (so it shows up there once the user adds
+        it), everything else is parked at the end. */
+    inline bool finishOrder (std::vector<int> items, ChainOrder& out)
+    {
+        auto has = [&items] (int item) { return std::find (items.begin(), items.end(), item) != items.end(); };
+
+        for (int type = firstGenerationTypes; type < count; ++type)
+            if (! has (type) && ! all()[(size_t) type].postAmp && has (ampItem))
+                items.insert (std::find (items.begin(), items.end(), ampItem), type);
+
+        for (int item = 0; item < numItems; ++item)
+            if (! has (item))
+                items.push_back (item);
+
+        if ((int) items.size() != numItems)
+            return false;
+
+        ChainOrder candidate {};
+        std::copy (items.begin(), items.end(), candidate.begin());
+
+        if (! isValidOrder (candidate))
+            return false;
+
+        out = candidate;
+        return true;
+    }
+
+    /** Parses orderToString output. Returns false (and leaves `out` alone) if it is not a valid order.
+        Orders from before the Capture pedal have 22 entries (7 types x 3 copies + the amp): their items are
+        renumbered to the current layout (copy * count + type) and the new pedal is added. */
+    inline bool orderFromString (const juce::String& text, ChainOrder& out)
+    {
+        juce::StringArray parts;
+        parts.addTokens (text, ",", "");
+        parts.removeEmptyStrings();
+
+        std::vector<int> values;
+        for (const auto& part : parts)
+            values.push_back (part.getIntValue());
+
+        if ((int) values.size() == numItems)
+        {
+            ChainOrder parsed {};
+            std::copy (values.begin(), values.end(), parsed.begin());
+
+            if (! isValidOrder (parsed))
+                return false;
+
+            out = parsed;
+            return true;
+        }
+
+        constexpr int oldAmp = firstGenerationTypes * maxCopies;
+
+        if ((int) values.size() == oldAmp + 1)
+        {
+            std::vector<int> items;
+            juce::uint32 seen = 0;
+
+            for (int old : values)
+            {
+                if (old < 0 || old > oldAmp || (seen & (1u << old)) != 0)
+                    return false;
+
+                seen |= 1u << old;
+                items.push_back (old == oldAmp ? ampItem
+                                               : makeItem (old % firstGenerationTypes, old / firstGenerationTypes));
+            }
+
+            return finishOrder (std::move (items), out);
+        }
+
+        return false;
+    }
+
+    /** Orders saved by version 1 packed 8 items (7 pedals + the amp as item 7) at 4 bits each into
+        one integer. Converts such a value; items that did not exist back then are added by finishOrder. */
+    inline bool orderFromLegacy (juce::uint32 packed, ChainOrder& out)
+    {
+        constexpr int legacyItems = firstGenerationTypes + 1;
+        std::vector<int> items;
+        juce::uint32 seen = 0;
+
+        for (int i = 0; i < legacyItems; ++i)
+        {
+            const int old = (int) ((packed >> (4 * i)) & 0xfu);
+            if (old >= legacyItems || (seen & (1u << old)) != 0)
+                return false;
+
+            seen |= 1u << old;
+            items.push_back (old == firstGenerationTypes ? ampItem : old);
+        }
+
+        return finishOrder (std::move (items), out);
     }
 
     //==========================================================================

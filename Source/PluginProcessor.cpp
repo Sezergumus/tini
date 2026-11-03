@@ -122,6 +122,8 @@ void NeuralFlowAmpAudioProcessor::prepareToPlay (double sampleRate, int samplesP
 {
 	crunchEffect.prepare(sampleRate, samplesPerBlock);
 	nam.prepare(sampleRate, samplesPerBlock);
+	for (auto& engine : pedalNam)
+		engine.prepare(sampleRate, samplesPerBlock);
    
 	juce::dsp::ProcessSpec spec;
 	spec.sampleRate = sampleRate;
@@ -351,6 +353,29 @@ void NeuralFlowAmpAudioProcessor::processPedal (int item, juce::AudioBuffer<floa
         break;
     }
 
+    case 7: // Capture: a Neural Amp Modeler model of a pedal (passes the signal through without one)
+    {
+        const float mix = params.value(2) / 100.0f;
+        const bool blend = mix < 0.999f;
+        const int numCh = buffer.getNumChannels();
+        const int numSamples = buffer.getNumSamples();
+
+        if (blend)
+        {
+            compressorDry.setSize(numCh, numSamples, false, false, true);
+            for (int ch = 0; ch < numCh; ++ch)
+                compressorDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+        }
+
+        if (pedalNam[c].process(buffer, params.value(0), params.value(1), false) && blend)
+        {
+            buffer.applyGain(mix);
+            for (int ch = 0; ch < numCh; ++ch)
+                buffer.addFrom(ch, 0, compressorDry, ch, 0, numSamples, 1.0f - mix);
+        }
+        break;
+    }
+
     default:
         jassertfalse;
         break;
@@ -505,6 +530,17 @@ bool NeuralFlowAmpAudioProcessor::loadPreset (int index)
             loadNamModel (namFile);
     }
 
+    for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+    {
+        const auto& path = preset.capturePaths[(size_t) copy];
+        if (path.isNotEmpty())
+        {
+            const auto captureFile = FileLibrary::resolveSaved(juce::File(path));
+            if (captureFile.existsAsFile())
+                loadPedalModel(copy, captureFile);
+        }
+    }
+
     currentPresetName = preset.name;
     if (index < presets.getNumFactory())
         currentProgram = index;
@@ -520,6 +556,11 @@ int NeuralFlowAmpAudioProcessor::saveCurrentAsPreset (const juce::String& name)
     preset.order = getChainOrder();
     preset.irPath = loadedIrFile.existsAsFile() ? loadedIrFile.getFullPathName() : juce::String();
     preset.namPath = nam.getFile().existsAsFile() ? nam.getFile().getFullPathName() : juce::String();
+    for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+    {
+        const auto file = pedalNam[(size_t) copy].getFile();
+        preset.capturePaths[(size_t) copy] = file.existsAsFile() ? file.getFullPathName() : juce::String();
+    }
 
     const int index = presets.saveUserPreset (std::move (preset));
     if (index >= 0)
@@ -588,6 +629,8 @@ void NeuralFlowAmpAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
     auto state = apvts.copyState();
     state.setProperty("irPath", loadedIrFile.getFullPathName(), nullptr);
     state.setProperty("namPath", nam.getFile().getFullPathName(), nullptr);
+    for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+        state.setProperty("capturePath" + juce::String(copy), pedalNam[(size_t) copy].getFile().getFullPathName(), nullptr);
     state.setProperty("chain", PedalCatalog::orderToString(getChainOrder()), nullptr);
     state.setProperty("presetName", currentPresetName, nullptr);
     state.setProperty("tunerRef", getTunerReferenceHz(), nullptr);
@@ -633,6 +676,15 @@ void NeuralFlowAmpAudioProcessor::setStateInformation (const void* data, int siz
         loadNamModel(namFile);
     else
         unloadNamModel();
+
+    for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+    {
+        const juce::File captureFile = FileLibrary::resolveSaved(juce::File(state.getProperty("capturePath" + juce::String(copy)).toString()));
+        if (captureFile.existsAsFile())
+            loadPedalModel(copy, captureFile);
+        else
+            unloadPedalModel(copy);
+    }
 }
 
 //==============================================================================
@@ -711,6 +763,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralFlowAmpAudioProcessor:
         addFloat("REVERB_SIZE", "Reverb Size", 0.0f, 100.0f, 50.0f);
         addFloat("REVERB_DAMP", "Reverb Damping", 0.0f, 100.0f, 50.0f);
         addFloat("REVERB_MIX", "Reverb Mix", 0.0f, 100.0f, 25.0f);
+
+        addSwitches("CAP", "Capture", false);
+        addFloat("CAP_IN", "Capture Input", -24.0f, 24.0f, 0.0f);
+        addFloat("CAP_OUT", "Capture Output", -24.0f, 24.0f, 0.0f);
+        addFloat("CAP_MIX", "Capture Mix", 0.0f, 100.0f, 100.0f);
     }
 
     // Cab filters (defaults are fully open, i.e. transparent)
@@ -733,6 +790,18 @@ void NeuralFlowAmpAudioProcessor::loadNamModel(const juce::File& file)
 {
     if (file.existsAsFile())
         nam.loadModel(file);
+}
+
+void NeuralFlowAmpAudioProcessor::loadPedalModel(int copy, const juce::File& file)
+{
+    if (juce::isPositiveAndBelow(copy, PedalCatalog::maxCopies) && file.existsAsFile())
+        pedalNam[(size_t) copy].loadModel(file);
+}
+
+void NeuralFlowAmpAudioProcessor::unloadPedalModel(int copy)
+{
+    if (juce::isPositiveAndBelow(copy, PedalCatalog::maxCopies))
+        pedalNam[(size_t) copy].unload();
 }
 
 void NeuralFlowAmpAudioProcessor::unloadNamModel()

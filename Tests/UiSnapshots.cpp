@@ -232,7 +232,8 @@ void renderUiSnapshots (const juce::File& dir)
         };
         auto* ampNode = &strip.getAmpTile();
 
-        constexpr int gate = 0, comp = 1, boost = 2, od = 3, chorus = 4, delay = 5, reverb = 6, amp = PedalCatalog::ampItem;
+        // the Capture pedal is not in the chain at first: it is parked right before the amp
+        constexpr int gate = 0, comp = 1, boost = 2, od = 3, chorus = 4, delay = 5, reverb = 6, capture = 7, amp = PedalCatalog::ampItem;
         auto order = [&] { return p.getChainOrder(); };
         auto sameAs = [&] (std::initializer_list<int> expected)
         {
@@ -248,7 +249,7 @@ void renderUiSnapshots (const juce::File& dir)
         };
 
         report (ampNode != nullptr, "the amp is an item of the chain");
-        report (sameAs ({ gate, comp, boost, od, amp, chorus, delay, reverb }), "the chain starts in the default order");
+        report (sameAs ({ gate, comp, boost, od, capture, amp, chorus, delay, reverb }), "the chain starts in the default order");
 
         // a click without moving must not reorder anything
         if (auto* b = pedalOf (boost))
@@ -256,7 +257,7 @@ void renderUiSnapshots (const juce::File& dir)
             strip.startDrag (*b, b->getBounds().getCentre());
             strip.dragTo (b->getBounds().getCentre() + juce::Point<int> (2, 0));
             strip.endDrag();
-            report (sameAs ({ gate, comp, boost, od, amp, chorus, delay, reverb }), "a click on the grip does not reorder");
+            report (sameAs ({ gate, comp, boost, od, capture, amp, chorus, delay, reverb }), "a click on the grip does not reorder");
         }
 
         // carry the boost pedal over the overdrive and the amp, and set it down after the amp
@@ -272,7 +273,7 @@ void renderUiSnapshots (const juce::File& dir)
             strip.endDrag();
             settleLoop (300);
 
-            report (sameAs ({ gate, comp, od, amp, boost, chorus, delay, reverb }),
+            report (sameAs ({ gate, comp, od, amp, capture, boost, chorus, delay, reverb }),
                     "dragging the boost across the amp moves it after the amp: " + orderToString (order()));
             report (pedalOf (boost)->getX() > ampNode->getX() && pedalOf (boost)->getX() < pedalOf (chorus)->getX(),
                     "the pedals settle into their new places on screen");
@@ -285,7 +286,7 @@ void renderUiSnapshots (const juce::File& dir)
             drag (*ampNode, pedalOf (gate)->getBounds().getCentreX() - 40, 30);
             strip.endDrag();
             settleLoop (300);
-            report (sameAs ({ amp, gate, comp, od, boost, chorus, delay, reverb }),
+            report (sameAs ({ amp, gate, comp, od, capture, boost, chorus, delay, reverb }),
                     "the amp can be dragged to the front: " + orderToString (order()));
         }
 

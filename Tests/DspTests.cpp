@@ -411,7 +411,7 @@ namespace
         auto order = PedalCatalog::defaultOrder();
 
         check (PedalCatalog::isValidOrder (order), "the default chain order is a valid permutation");
-        check (order[4] == PedalCatalog::ampItem, "the amp starts between the pre-amp and post-amp pedals");
+        check (order[5] == PedalCatalog::ampItem, "the amp starts between the pre-amp and post-amp pedals (the parked Capture pedal sits just before it)");
 
         // Same pedals, different order: a boost ahead of the overdrive gets squashed by it, a boost
         // behind the overdrive is plain gain.
@@ -1056,6 +1056,160 @@ namespace
 
     float centsBetween (double measured, double expected) { return (float) (1200.0 * std::log2 (measured / expected)); }
 
+
+    //==========================================================================
+    bool waitForPedalNam (NeuralFlowAmpAudioProcessor& p, int copy)
+    {
+        for (int i = 0; i < 500; ++i)
+        {
+            const auto state = p.pedalNam[(size_t) copy].getStatus().state;
+            if (state == NamEngine::Status::State::ready || state == NamEngine::Status::State::failed)
+                break;
+            juce::Thread::sleep (10);
+        }
+        run (p, 2, [] (int, juce::AudioBuffer<float>&) {});
+        return p.pedalNam[(size_t) copy].getStatus().state == NamEngine::Status::State::ready;
+    }
+
+    void testCapturePedal()
+    {
+        std::printf ("\n-- Capture pedal (NAM model of a pedal) --\n");
+
+        constexpr int capture = 7;   // type of the Capture pedal; its copy 0 is item 7
+        const int from = 20 * blockSize;
+
+        // chain orders saved before the Capture pedal existed have 22 entries and are renumbered
+        {
+            const juce::String oldDefault = "0,1,2,3,21,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20";
+            PedalCatalog::ChainOrder migrated {};
+            check (PedalCatalog::orderFromString (oldDefault, migrated), "an order from before the Capture pedal is accepted");
+            check (std::equal (migrated.begin(), migrated.begin() + 9, PedalCatalog::defaultOrder().begin()),
+                   "...and an old default order becomes the new default chain: " + PedalCatalog::orderToString (migrated));
+
+            // amp first, a reverb copy in front: everything keeps its relative place, Capture goes right before the amp
+            const juce::String custom = "21,6,0,1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20";
+            check (PedalCatalog::orderFromString (custom, migrated), "a rearranged old order is accepted");
+
+            const auto ampAt = (int) (std::find (migrated.begin(), migrated.end(), PedalCatalog::ampItem) - migrated.begin());
+            check (PedalCatalog::isValidOrder (migrated) && ampAt == 1 && migrated[0] == capture,
+                   "...the new pedal is parked right before the amp: " + PedalCatalog::orderToString (migrated));
+            check (migrated[2] == 6 && migrated[3] == 0 && migrated[4] == 1, "...and the old items keep their places");
+
+            // a second copy of a pedal keeps being the same pedal under the new numbering
+            const juce::String copies = "0,1,2,3,21,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20";
+            PedalCatalog::orderFromString (copies, migrated);
+            const int boost2 = PedalCatalog::makeItem (2, 1);
+            check (std::find (migrated.begin(), migrated.end(), boost2) != migrated.end(), "copies of the old pedals survive");
+
+            check (! PedalCatalog::orderFromString ("0,0,2,3,21,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20", migrated),
+                   "an old order with a repeated item is refused");
+            check (! PedalCatalog::orderFromString ("0,1,2", migrated), "a short order is refused");
+
+            // a saved session of the old kind loads with its arrangement
+            Prepared a;
+            juce::MemoryBlock state;
+            a.proc.getStateInformation (state);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+            if (xml != nullptr)
+            {
+                xml->setAttribute ("chain", custom);
+                juce::MemoryBlock patched;
+                juce::AudioProcessor::copyXmlToBinary (*xml, patched);
+                a.proc.setStateInformation (patched.getData(), (int) patched.getSize());
+                check (a.proc.getChainOrder()[0] == capture && a.proc.getChainOrder()[1] == PedalCatalog::ampItem,
+                       "an old session keeps its chain order (amp first)");
+            }
+        }
+
+        // no model: the pedal passes the signal through
+        {
+            const auto plain = sineThrough (0.05f, [] (auto&) {});
+            const auto empty = sineThrough (0.05f, [] (auto& p) { addPedal (p, "CAP"); });
+            check (differenceRms (plain, empty, from) < 1.0e-6f, "a Capture pedal without a model changes nothing");
+        }
+
+        // with a model it colours the sound; mix 0 puts the dry signal back; the output knob scales it
+        {
+            const auto plain = sineThrough (0.05f, [] (auto&) {});
+
+            juce::AudioBuffer<float> wet, dry, loud;
+            {
+                Prepared a;
+                makeTransparent (a.proc);
+                addPedal (a.proc, "CAP");
+                a.proc.loadPedalModel (0, testModel());
+                check (waitForPedalNam (a.proc, 0), "a model can be loaded into the Capture pedal");
+                wet = run (a.proc, 40, sineInput (0.05f));
+
+                setParam (a.proc, "CAP_MIX", 0.0f);
+                dry = run (a.proc, 40, sineInput (0.05f));
+            }
+            {
+                Prepared a;
+                makeTransparent (a.proc);
+                addPedal (a.proc, "CAP");
+                setParam (a.proc, "CAP_OUT", 6.0f);
+                a.proc.loadPedalModel (0, testModel());
+                waitForPedalNam (a.proc, 0);
+                loud = run (a.proc, 40, sineInput (0.05f));
+            }
+
+            check (differenceRms (plain, wet, from) > 1.0e-4f, "the model changes the sound (difference " + juce::String (differenceRms (plain, wet, from), 5) + ")");
+            check (differenceRms (plain, dry, from) < 1.0e-4f, "CAP_MIX 0 % is the dry signal again");
+
+            const float ratio = rms (loud, 0, from) / rms (wet, 0, from);
+            check (std::abs (ratio - juce::Decibels::decibelsToGain (6.0f)) < 0.05f,
+                   "CAP_OUT +6 dB doubles the output (ratio " + juce::String (ratio, 3) + ")");
+        }
+
+        // a removed pedal or a bypassed one does nothing even with a model
+        {
+            const auto plain = sineThrough (0.05f, [] (auto&) {});
+
+            auto withModel = [&] (bool added, bool on)
+            {
+                Prepared a;
+                makeTransparent (a.proc);
+                a.proc.loadPedalModel (0, testModel());
+                waitForPedalNam (a.proc, 0);
+                if (added)
+                    addPedal (a.proc, "CAP", on);
+                return run (a.proc, 40, sineInput (0.05f));
+            };
+
+            check (differenceRms (plain, withModel (false, true), from) < 1.0e-6f, "a pedal that is not in the chain does nothing");
+            check (differenceRms (plain, withModel (true, false), from) < 1.0e-6f, "a bypassed Capture pedal does nothing");
+        }
+
+        // each copy has its own model; the session and presets remember them
+        {
+            juce::MemoryBlock state;
+            auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getChildFile ("nfa_capture_" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+            {
+                Prepared a;
+                a.proc.presets.setUserFolder (folder);
+                a.proc.loadPedalModel (1, testModel());
+                check (waitForPedalNam (a.proc, 1), "the second copy loads its own model");
+                check (! a.proc.pedalNam[0].hasModel() && a.proc.pedalNam[1].hasModel(), "...the first copy stays empty");
+                a.proc.getStateInformation (state);
+                a.proc.saveCurrentAsPreset ("Capture Test");
+            }
+
+            Prepared b;
+            b.proc.presets.setUserFolder (folder);
+            b.proc.setStateInformation (state.getData(), (int) state.getSize());
+            check (waitForPedalNam (b.proc, 1) && b.proc.pedalNam[1].getFile() == testModel(), "the session restores the pedal's model");
+            check (b.proc.pedalNam[0].getFile() == juce::File(), "...and leaves the other copy empty");
+
+            b.proc.unloadPedalModel (1);
+            b.proc.loadPreset (b.proc.presets.indexOf ("Capture Test"));
+            check (waitForPedalNam (b.proc, 1) && b.proc.pedalNam[1].getFile() == testModel(), "a preset restores the pedal's model");
+
+            folder.deleteRecursively();
+        }
+    }
+
     //==========================================================================
     void testRigGain()
     {
@@ -1313,6 +1467,7 @@ int main (int argc, char** argv)
     testPresetEditing();
     testTuner();
     testRigGain();
+    testCapturePedal();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

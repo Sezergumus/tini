@@ -21,6 +21,7 @@ public:
         PedalCatalog::ChainOrder order = PedalCatalog::defaultOrder();
         juce::String irPath;                    // empty = leave the current IR alone
         juce::String namPath;                   // empty = leave the current NAM model alone
+        std::array<juce::String, PedalCatalog::maxCopies> capturePaths;   // Capture pedal models, per copy; empty = leave alone
         juce::File file;                        // user presets only
     };
 
@@ -252,6 +253,10 @@ private:
         xml.setAttribute ("irPath", preset.irPath);
         xml.setAttribute ("namPath", preset.namPath);
 
+        for (size_t copy = 0; copy < preset.capturePaths.size(); ++copy)
+            if (preset.capturePaths[copy].isNotEmpty())
+                xml.setAttribute ("capturePath" + juce::String ((int) copy), preset.capturePaths[copy]);
+
         for (const auto& [id, value] : preset.values)
         {
             auto* p = xml.createNewChildElement ("P");
@@ -273,6 +278,9 @@ private:
         preset.file = file;
         preset.irPath = xml->getStringAttribute ("irPath");
         preset.namPath = xml->getStringAttribute ("namPath");
+
+        for (size_t copy = 0; copy < preset.capturePaths.size(); ++copy)
+            preset.capturePaths[copy] = xml->getStringAttribute ("capturePath" + juce::String ((int) copy));
 
         if (preset.name.isEmpty())
             return std::nullopt;
@@ -300,23 +308,21 @@ private:
         preset.name = name;
         preset.factory = true;
 
-        PedalCatalog::ChainOrder order {};
-        std::array<bool, PedalCatalog::numItems> placed {};
-        size_t n = 0;
+        std::vector<int> items;
 
         for (int item : chain)
         {
-            order[n++] = item;
-            placed[(size_t) item] = true;
+            items.push_back (item);
 
             if (item != PedalCatalog::ampItem && PedalCatalog::isRemovable (item))
                 preset.values[PedalCatalog::addedId (item)] = 1.0f;
         }
-        for (int item = 0; item < PedalCatalog::numItems; ++item)
-            if (! placed[(size_t) item])
-                order[n++] = item;
 
-        jassert (PedalCatalog::isValidOrder (order));
+        // what is not listed is parked: pedal types that are new since the first version go right
+        // before the amp, everything else at the end
+        PedalCatalog::ChainOrder order {};
+        [[maybe_unused]] const bool ok = PedalCatalog::finishOrder (std::move (items), order);
+        jassert (ok);
         preset.order = order;
 
         for (const auto& [id, v] : values)
