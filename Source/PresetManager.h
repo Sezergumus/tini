@@ -21,7 +21,7 @@ public:
         PedalCatalog::ChainOrder order = PedalCatalog::defaultOrder();
         juce::String irPath;                    // empty = leave the current IR alone
         juce::String namPath;                   // empty = leave the current NAM model alone
-        std::array<juce::String, PedalCatalog::maxCopies> capturePaths;   // Capture pedal models, per copy; empty = leave alone
+        std::array<juce::String, PedalCatalog::namCopies> capturePaths;   // NAM pedal models, per copy; empty = leave alone
         juce::File file;                        // user presets only
     };
 

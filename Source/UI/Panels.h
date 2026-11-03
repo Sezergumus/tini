@@ -304,7 +304,7 @@ public:
     /** First copy of this pedal type that is not in the chain yet, as an item number; -1 if all are used. */
     static int firstFreeCopy (juce::AudioProcessorValueTreeState& state, int type)
     {
-        for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+        for (int copy = 0; copy < PedalCatalog::copiesOfType (type); ++copy)
             if (! isInChain (state, PedalCatalog::makeItem (type, copy)))
                 return PedalCatalog::makeItem (type, copy);
         return -1;
@@ -313,7 +313,7 @@ public:
     static int copiesInChain (juce::AudioProcessorValueTreeState& state, int type)
     {
         int n = 0;
-        for (int copy = 0; copy < PedalCatalog::maxCopies; ++copy)
+        for (int copy = 0; copy < PedalCatalog::copiesOfType (type); ++copy)
             n += isInChain (state, PedalCatalog::makeItem (type, copy)) ? 1 : 0;
         return n;
     }
@@ -664,7 +664,7 @@ public:
         : juce::Button (juce::String ("row_") + PedalCatalog::all()[(size_t) pedalType].name),
           type (pedalType), info (PedalCatalog::all()[(size_t) pedalType]),
           tint (Theme::categoryColour (info.category)),
-          used (copiesUsed), inChain (copiesUsed >= PedalCatalog::maxCopies)
+          used (copiesUsed), inChain (copiesUsed >= PedalCatalog::copiesOfType (pedalType))
     {
         setEnabled (! inChain);
         setMouseCursor (inChain ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
@@ -738,7 +738,7 @@ public:
         for (int type = 0; type < PedalCatalog::count; ++type)
         {
             const int used = ChainStrip::copiesInChain (apvts, type);
-            available += PedalCatalog::maxCopies - used;
+            available += PedalCatalog::copiesOfType (type) - used;
 
             auto* row = rows.add (new PedalRow (type, used));
             row->onClick = [this, row]
@@ -907,11 +907,12 @@ public:
     }
 
 private:
-    int currentMask() const
+    juce::uint64 currentMask() const
     {
-        int mask = 0;
-        for (int item = 0; item < PedalCatalog::ampItem; ++item)
-            mask |= (ChainStrip::isInChain (apvts, item) ? 1 : 0) << item;
+        juce::uint64 mask = 0;
+        for (int item = 0; item < PedalCatalog::numItems; ++item)
+            if (! PedalCatalog::isAmp (item) && ChainStrip::isInChain (apvts, item))
+                mask |= (juce::uint64) 1 << item;
         return mask;
     }
 
@@ -1044,6 +1045,6 @@ private:
     AddButton addButton;
     BlockTile cabTile;
     int selected = PedalCatalog::ampItem;
-    int shownMask = 0;
+    juce::uint64 shownMask = 0;
     PedalCatalog::ChainOrder shownOrder {};
 };

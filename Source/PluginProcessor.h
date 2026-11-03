@@ -110,9 +110,9 @@ public:
     void loadNamModel(const juce::File& file);   // background load, see nam.getStatus()
     void unloadNamModel();
 
-    /** The Capture pedal's models: one engine per pedal copy (index = copy), each loaded on its own
+    /** The NAM pedals' models: one engine per pedal copy (index = copy), each loaded on its own
         background thread. A copy without a loaded model passes the signal through. */
-    std::array<NamEngine, PedalCatalog::maxCopies> pedalNam;
+    std::array<NamEngine, PedalCatalog::namCopies> pedalNam;
     void loadPedalModel(int copy, const juce::File& file);
     void unloadPedalModel(int copy);
 
@@ -143,7 +143,7 @@ private:
         std::array<std::atomic<float>*, 4> knob {};
         float value (int i) const { return knob[(size_t) i]->load(); }
     };
-    std::array<PedalParams, PedalCatalog::ampItem> pedalParams;
+    std::array<PedalParams, PedalCatalog::numItems> pedalParams;   // indexed by item (the amp's slot stays empty)
 
     std::atomic<float>* ampTypeParam = nullptr;
     std::atomic<float>* namInParam = nullptr;

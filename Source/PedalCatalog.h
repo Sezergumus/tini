@@ -19,35 +19,50 @@ namespace PedalCatalog
     /** Type number of the Capture pedal (the last entry of all()). */
     constexpr int captureType = 7;
 
-    /** How many copies of each pedal type can be in the chain at once. Every copy has its own
+    /** How many copies of each built-in pedal type can be in the chain at once. Every copy has its own
         parameters, created up front (copy 0 keeps the plain ids, copy n >= 1 gets a "_<n+1>"
         suffix), so host automation keeps working while the chain itself stays dynamic. */
     constexpr int maxCopies = 3;
 
-    /** Chain items are numbered copy * count + type. The amp is the last item. */
+    /** NAM pedals are what a library is full of, so they get a much bigger pool than the built-in
+        pedals (a host needs its parameters up front, so the pool cannot grow without end). */
+    constexpr int namCopies = 12;
+
+    /** Copies of one pedal type. */
+    constexpr int copiesOfType (int type) { return type == captureType ? namCopies : maxCopies; }
+
+    /** Chain items: copy * count + type for the first maxCopies copies of every type, then the amp
+        (the item after them), then the extra copies of the NAM pedal. */
     constexpr int ampItem = count * maxCopies;
-    constexpr int numItems = ampItem + 1;
+    constexpr int firstExtraItem = ampItem + 1;
+    constexpr int numItems = firstExtraItem + (namCopies - maxCopies);
+
+    /** The most pedals of any kind that fit in a chain order. */
+    static_assert (numItems <= 64, "chain orders are checked with a 64 bit mask");
 
     /** A chain order lists every item once. Items whose pedal is not "added" are parked in it
         and skipped by the processor and the UI. */
     using ChainOrder = std::array<int, numItems>;
 
     inline bool isAmp (int item)          { return item == ampItem; }
-    inline int  typeOf (int item)         { return item % count; }
-    inline int  copyOf (int item)         { return item / count; }
-    inline int  makeItem (int type, int copy) { return copy * count + type; }
+    inline int  typeOf (int item)         { return item >= firstExtraItem ? captureType : item % count; }
+    inline int  copyOf (int item)         { return item >= firstExtraItem ? maxCopies + (item - firstExtraItem) : item / count; }
+    inline int  makeItem (int type, int copy)
+    {
+        return copy < maxCopies ? copy * count + type : firstExtraItem + (copy - maxCopies);   // copies past maxCopies are NAM pedals
+    }
 
     /** True if every item 0..numItems-1 appears exactly once. */
     inline bool isValidOrder (const ChainOrder& order)
     {
-        juce::uint32 seen = 0;
+        juce::uint64 seen = 0;
         for (int item : order)
         {
             if (item < 0 || item >= numItems)
                 return false;
-            seen |= 1u << item;
+            seen |= (juce::uint64) 1 << item;
         }
-        return seen == (1u << numItems) - 1u;
+        return seen == ((juce::uint64) 1 << numItems) - 1u;
     }
 
     /** "3,0,21,..." form used in saved state and preset files. */
@@ -141,6 +156,9 @@ namespace PedalCatalog
             for (int i = 0; i < count; ++i)
                 order[(size_t) n++] = makeItem (i, copy);
 
+        for (int copy = maxCopies; copy < namCopies; ++copy)
+            order[(size_t) n++] = makeItem (captureType, copy);
+
         return order;
     }
 
@@ -176,8 +194,10 @@ namespace PedalCatalog
     }
 
     /** Parses orderToString output. Returns false (and leaves `out` alone) if it is not a valid order.
-        Orders from before the Capture pedal have 22 entries (7 types x 3 copies + the amp): their items are
-        renumbered to the current layout (copy * count + type) and the new pedal is added. */
+        Two older layouts are converted:
+          - 25 entries (before the NAM pedal pool grew): the same item numbers, the new items are parked;
+          - 22 entries (before the Capture pedal): 7 types x 3 copies + the amp, renumbered to the current
+            layout (copy * count + type), and the new pedal is added. */
     inline bool orderFromString (const juce::String& text, ChainOrder& out)
     {
         juce::StringArray parts;
@@ -198,6 +218,25 @@ namespace PedalCatalog
 
             out = parsed;
             return true;
+        }
+
+        constexpr int secondGenerationItems = ampItem + 1;   // every type x maxCopies, then the amp
+
+        if ((int) values.size() == secondGenerationItems)
+        {
+            std::vector<int> items;
+            juce::uint64 seen = 0;
+
+            for (int item : values)
+            {
+                if (item < 0 || item > ampItem || (seen & ((juce::uint64) 1 << item)) != 0)
+                    return false;
+
+                seen |= (juce::uint64) 1 << item;
+                items.push_back (item);
+            }
+
+            return finishOrder (std::move (items), out);
         }
 
         constexpr int oldAmp = firstGenerationTypes * maxCopies;

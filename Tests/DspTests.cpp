@@ -1286,6 +1286,56 @@ namespace
 
             folder.deleteRecursively();
         }
+
+        // the pool of NAM pedals is much bigger than the three copies of a built-in pedal
+        {
+            const int last = PedalCatalog::namCopies - 1;
+            const int lastItem = PedalCatalog::makeItem (PedalCatalog::captureType, last);
+            check (PedalCatalog::namCopies > PedalCatalog::maxCopies * 2, "there are many NAM pedal copies (" + juce::String (PedalCatalog::namCopies) + ")");
+            check (PedalCatalog::typeOf (lastItem) == PedalCatalog::captureType && PedalCatalog::copyOf (lastItem) == last
+                       && PedalCatalog::makeItem (PedalCatalog::captureType, 2) == 2 * PedalCatalog::count + PedalCatalog::captureType,
+                   "item numbers of the extra copies map back to type and copy");
+            check (PedalCatalog::isValidOrder (PedalCatalog::defaultOrder()), "the default order lists every item once");
+
+            // an order of the layout before the pool grew (25 entries) is kept as it is
+            {
+                const auto base = PedalCatalog::defaultOrder();
+                std::vector<int> old (base.begin(), base.begin() + PedalCatalog::ampItem + 1);
+                std::swap (old[0], old[4]);
+
+                juce::StringArray text;
+                for (int item : old)
+                    text.add (juce::String (item));
+
+                PedalCatalog::ChainOrder migrated {};
+                check (PedalCatalog::orderFromString (text.joinIntoString (","), migrated)
+                           && migrated[0] == old[0] && migrated[4] == old[4] && PedalCatalog::isValidOrder (migrated),
+                       "an order with 25 entries is accepted and keeps its arrangement");
+            }
+
+            // the last copy has its own parameters, model and session entry
+            Prepared a;
+            check (a.proc.apvts.getParameter (PedalCatalog::addedId (lastItem)) != nullptr
+                       && a.proc.apvts.getParameter (PedalCatalog::knobId (lastItem, 2)) != nullptr
+                       && a.proc.apvts.getParameter (PedalCatalog::onId (lastItem)) != nullptr,
+                   "the last NAM copy has its parameters (" + PedalCatalog::addedId (lastItem) + ")");
+            check (a.proc.apvts.getParameter (PedalCatalog::suffixedId ("GATE_ADDED", 3)) == nullptr, "...while built-in pedals still stop at three copies");
+
+            makeTransparent (a.proc);
+            const auto plain = sineThrough (0.05f, [] (auto&) {});
+            setParam (a.proc, PedalCatalog::addedId (lastItem), 1.0f);
+            a.proc.loadPedalModel (last, testModel());
+            check (waitForPedalNam (a.proc, last), "a model loads into the last copy");
+            const auto wet = run (a.proc, 40, sineInput (0.05f));
+            check (differenceRms (plain, wet, 20 * blockSize) > 1.0e-4f, "the last NAM copy processes the signal");
+
+            juce::MemoryBlock state;
+            a.proc.getStateInformation (state);
+            Prepared b;
+            b.proc.setStateInformation (state.getData(), (int) state.getSize());
+            check (waitForPedalNam (b.proc, last) && b.proc.pedalNam[(size_t) last].getFile() == testModel(),
+                   "the session restores the model of the last copy");
+        }
     }
 
     //==========================================================================
