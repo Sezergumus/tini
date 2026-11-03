@@ -24,6 +24,17 @@ class ModelList : public juce::Component,
 public:
     static constexpr int rowHeight = 46;
 
+    /** One line on screen: a file, or the header of a pack. */
+    struct Row
+    {
+        juce::File file;
+        juce::String pack;
+        int count = 0;
+        bool isPack = false, open = false;
+
+        Row (juce::File f, juce::String p, int n, bool header) : file (std::move (f)), pack (std::move (p)), count (n), isPack (header) {}
+    };
+
     ModelList (NeuralFlowAmpAudioProcessor& p, FileLibrary::Kind libraryKind, juce::String primaryActionLabel)
         : processor (p), kind (libraryKind), primaryLabel (std::move (primaryActionLabel))
     {
@@ -65,6 +76,10 @@ public:
 
     /** Called after files were copied in (with the files in the library); a drop or Add files. */
     std::function<void (const juce::Array<juce::File>&)> onAdded;
+
+    /** When set, files dropped on the list are handed to this instead of being copied into the list's own
+        folder (the Library sorts them by itself). */
+    std::function<void (const juce::Array<juce::File>&)> onFilesDropped;
 
     void setPickOnClick (bool on) { pickOnClick = on; }
 
@@ -191,27 +206,53 @@ public:
     }
 
     //==========================================================================
-    int getNumRows() override { return files.size(); }
+    int getNumRows() override { return (int) rows.size(); }
     int getNumFiles() const { return files.size(); }
     int getNumInFolder() const { return all.size(); }
     juce::File getFile (int row) const { return files[row]; }
     juce::File getSelectedFile() const { return selected; }
 
-    /** Row of `file` in the shown list, or -1. */
-    int rowOf (const juce::File& file) const { return files.indexOf (file); }
+    /** Row of `file` in the shown list, or -1 (also while its pack is closed). */
+    int rowOf (const juce::File& file) const
+    {
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (! rows[i].isPack && rows[i].file == file)
+                return (int) i;
+        return -1;
+    }
 
+    /** Selects `file`; its pack opens if it was closed. */
     void selectFile (const juce::File& file)
     {
-        const int row = files.indexOf (file);
+        if (rowOf (file) < 0 && files.contains (file))
+        {
+            openPacks.insert (FileLibrary::packOf (file, kind));
+            buildRows();
+            list.updateContent();
+        }
+
+        const int row = rowOf (file);
         if (row >= 0)
             list.selectRow (row);
+    }
+
+    /** Opens or closes a pack. */
+    void togglePack (const juce::String& pack)
+    {
+        if (openPacks.erase (pack) == 0)
+            openPacks.insert (pack);
+
+        buildRows();
+        list.updateContent();
+        reselect();
+        list.repaint();
     }
 
     /** Reads the folder again. */
     void rescan()
     {
         FileLibrary::ensureFolders();
-        all = FileLibrary::list (getFolder(), FileLibrary::wildcardFor (kind));
+        all = FileLibrary::listTree (getFolder(), FileLibrary::wildcardFor (kind));
 
         // the filters offer what every file says about itself, not only the lines on screen: start reading them
         // all in the background (the cache answers at once for files it already knows)
@@ -225,25 +266,22 @@ public:
     /** Looks at the folder once; the list only changes when its content did. Runs by itself while visible. */
     void refreshIfChanged()
     {
-        if (FileLibrary::list (getFolder(), FileLibrary::wildcardFor (kind)) != all)
+        if (FileLibrary::listTree (getFolder(), FileLibrary::wildcardFor (kind)) != all)
             rescan();
     }
 
-    /** Copies `sources` into the folder of this list. Returns how many were added. */
+    /** Copies `sources` into the folder of this list: models / IRs that fit it, and the ones inside zips and
+        folders (those become packs). Returns how many were added. */
     int addFiles (const juce::Array<juce::File>& sources)
     {
         FileLibrary::ensureFolders();
 
-        juce::Array<juce::File> arrived;
-        for (const auto& source : sources)
-        {
-            if (! source.existsAsFile() || ! FileLibrary::fits (source, kind))
-                continue;
+        const FileLibrary::Batch batch (sources);
+        const auto done = FileLibrary::importBatch (batch, &kind);
 
-            const auto copy = FileLibrary::importFile (source, kind);
-            if (copy.existsAsFile())
-                arrived.add (copy);
-        }
+        juce::Array<juce::File> arrived;
+        for (const auto& item : done)
+            arrived.add (item.file);
 
         if (! arrived.isEmpty())
         {
@@ -296,10 +334,10 @@ public:
     /** The context menu of a row (the tests drive the actions directly). */
     void showMenu (int row)
     {
-        if (! juce::isPositiveAndBelow (row, files.size()))
+        if (! isFileRow (row))
             return;
 
-        const auto file = files[row];
+        const auto file = rows[(size_t) row].file;
 
         juce::PopupMenu menu;
         if (primaryLabel.isNotEmpty())
@@ -503,7 +541,19 @@ public:
     void resized() override { list.setBounds (getLocalBounds()); }
 
     //==========================================================================
-    bool isInterestedInFileDrag (const juce::StringArray& dragged) override { return FileActions::anyFits (dragged, kind); }
+    bool isInterestedInFileDrag (const juce::StringArray& dragged) override
+    {
+        if (onFilesDropped)
+            return FileLibrary::anythingToAdd (dragged);   // the owner sorts them
+
+        for (const auto& path : dragged)
+        {
+            const juce::File f (path);
+            if (f.isDirectory() || FileLibrary::isArchive (f) || FileLibrary::fits (f, kind))
+                return true;
+        }
+        return false;
+    }
     void fileDragEnter (const juce::StringArray&, int, int) override { setDropHighlight (true); }
     void fileDragExit (const juce::StringArray&) override            { setDropHighlight (false); }
 
@@ -515,7 +565,10 @@ public:
         for (const auto& path : dropped)
             sources.add (juce::File (path));
 
-        addFiles (sources);
+        if (onFilesDropped)
+            onFilesDropped (sources);
+        else
+            addFiles (sources);
     }
 
     /** The second line of a row. */
@@ -668,6 +721,58 @@ private:
             shown.add (item.file);
     }
 
+    /** The lines on screen: files that sit loose in the folder first, then every pack as a header line followed
+        by its files. A pack is closed until it is clicked - unless a search or a filter narrows the list, which
+        opens the packs that still have something in them. */
+    void buildRows()
+    {
+        std::vector<Row> built;
+        std::map<juce::String, juce::Array<juce::File>> byPack;
+
+        for (const auto& file : files)
+            byPack[FileLibrary::packOf (file, kind)].add (file);
+
+        for (const auto& file : byPack[juce::String()])
+            built.push_back ({ file, {}, 0, false });
+
+        for (const auto& entry : byPack)
+        {
+            if (entry.first.isEmpty())
+                continue;
+
+            const bool open = isNarrowed() || openPacks.count (entry.first) > 0;
+            built.push_back ({ {}, entry.first, entry.second.size(), true });
+            built.back().open = open;
+
+            if (open)
+                for (const auto& file : entry.second)
+                    built.push_back ({ file, entry.first, 0, false });
+        }
+
+        rowsChanged = built.size() != rows.size();
+        if (! rowsChanged)
+            for (size_t i = 0; i < built.size(); ++i)
+                if (built[i].file != rows[i].file || built[i].pack != rows[i].pack || built[i].open != rows[i].open
+                    || built[i].count != rows[i].count)
+                {
+                    rowsChanged = true;
+                    break;
+                }
+
+        rows = std::move (built);
+    }
+
+    void reselect()
+    {
+        const int row = rowOf (selected);
+        if (row >= 0)
+            list.selectRow (row, true, false);
+        else
+            list.deselectAllRows();
+    }
+
+    bool isFileRow (int row) const { return juce::isPositiveAndBelow (row, (int) rows.size()) && ! rows[(size_t) row].isPack; }
+
     void setDropHighlight (bool on)
     {
         if (dropHighlight != on)
@@ -704,14 +809,12 @@ private:
         if (! files.contains (selected))
             selected = {};
 
-        if (! same)
+        buildRows();
+
+        if (! same || rowsChanged)
             list.updateContent();
 
-        const int row = files.indexOf (selected);
-        if (row >= 0)
-            list.selectRow (row, true, false);
-        else
-            list.deselectAllRows();
+        reselect();
 
         list.repaint();
         repaint();
@@ -765,12 +868,22 @@ private:
 
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool rowSelected) override
     {
-        if (! juce::isPositiveAndBelow (row, files.size()))
+        if (! juce::isPositiveAndBelow (row, (int) rows.size()))
             return;
 
-        const auto file = files[row];
+        const auto& line = rows[(size_t) row];
+
+        if (line.isPack)
+        {
+            paintPack (g, line, width, height, rowSelected);
+            return;
+        }
+
+        const auto file = line.file;
         const bool loaded = isLoaded && isLoaded (file);
         auto r = juce::Rectangle<float> (0.0f, 1.0f, (float) width, (float) height - 2.0f);
+        const float indent = line.pack.isEmpty() ? 0.0f : 16.0f;   // the files of a pack sit under their header
+        r.removeFromLeft (indent);
 
         if (rowSelected)
         {
@@ -796,10 +909,51 @@ private:
         g.drawText (detailOf (file), text, juce::Justification::centredLeft, true);
     }
 
+    /** A pack header: a chevron, the name and how many files it holds (and how many of them are in use). */
+    void paintPack (juce::Graphics& g, const Row& line, int width, int height, bool hot)
+    {
+        auto r = juce::Rectangle<float> (0.0f, 1.0f, (float) width, (float) height - 2.0f);
+
+        g.setColour (juce::Colours::white.withAlpha (hot ? 0.08f : 0.04f));
+        g.fillRoundedRectangle (r, 6.0f);
+
+        const auto c = juce::Point<float> (r.getX() + 18.0f, r.getCentreY());
+        juce::Path chevron;
+        if (line.open)
+        {
+            chevron.startNewSubPath (c.x - 4.0f, c.y - 2.0f);
+            chevron.lineTo (c.x, c.y + 2.5f);
+            chevron.lineTo (c.x + 4.0f, c.y - 2.0f);
+        }
+        else
+        {
+            chevron.startNewSubPath (c.x - 2.0f, c.y - 4.0f);
+            chevron.lineTo (c.x + 2.5f, c.y);
+            chevron.lineTo (c.x - 2.0f, c.y + 4.0f);
+        }
+        g.setColour (Theme::textMid);
+        g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        const auto count = juce::String (line.count) + (line.count == 1 ? " file" : " files");
+        auto text = r.reduced (34.0f, 0.0f);
+
+        g.setColour (Theme::textLo);
+        g.setFont (Theme::ui (11.5f));
+        g.drawText (count, text.removeFromRight (70.0f), juce::Justification::centredRight, false);
+
+        g.setColour (Theme::textHi);
+        g.setFont (Theme::ui (13.0f, true));
+        g.drawText (line.pack, text, juce::Justification::centredLeft, true);
+    }
+
     void selectedRowsChanged (int lastRowSelected) override
     {
-        const auto now = juce::isPositiveAndBelow (lastRowSelected, files.size()) && list.getNumSelectedRows() > 0
-                             ? files[lastRowSelected] : juce::File();
+        if (juce::isPositiveAndBelow (lastRowSelected, (int) rows.size()) && rows[(size_t) lastRowSelected].isPack
+            && list.getNumSelectedRows() > 0)
+            return;   // a pack header is not a file: clicking it opens or closes it (see listBoxItemClicked)
+
+        const auto now = isFileRow (lastRowSelected) && list.getNumSelectedRows() > 0
+                             ? rows[(size_t) lastRowSelected].file : juce::File();
 
         if (now == selected)
             return;
@@ -812,38 +966,51 @@ private:
 
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
-        if (! juce::isPositiveAndBelow (row, files.size()))
+        if (! juce::isPositiveAndBelow (row, (int) rows.size()))
             return;
+
+        if (rows[(size_t) row].isPack)
+        {
+            if (! e.mods.isPopupMenu() && ! isNarrowed())
+                togglePack (rows[(size_t) row].pack);
+            return;
+        }
 
         if (e.mods.isPopupMenu())
             showMenu (row);
         else if (pickOnClick)
-            pick (files[row]);
+            pick (rows[(size_t) row].file);
     }
 
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
     {
-        if (juce::isPositiveAndBelow (row, files.size()))
-            pick (files[row]);
+        if (isFileRow (row))
+            pick (rows[(size_t) row].file);
     }
 
     void returnKeyPressed (int row) override
     {
-        if (juce::isPositiveAndBelow (row, files.size()))
-            pick (files[row]);
+        if (isFileRow (row))
+            pick (rows[(size_t) row].file);
+        else if (juce::isPositiveAndBelow (row, (int) rows.size()) && ! isNarrowed())
+            togglePack (rows[(size_t) row].pack);
     }
 
     void deleteKeyPressed (int row) override
     {
-        if (juce::isPositiveAndBelow (row, files.size()))
-            askDelete (files[row]);
+        if (isFileRow (row))
+            askDelete (rows[(size_t) row].file);
     }
 
     NeuralFlowAmpAudioProcessor& processor;
     FileLibrary::Kind kind;
     juce::String primaryLabel, emptyText = "Nothing here yet.\nDrop files onto this list, or copy them into the folder.", search;
     juce::ListBox list;
-    juce::Array<juce::File> all, files;   // all = the folder, files = what matches the search
+    juce::Array<juce::File> all, files;   // all = the folder (packs included), files = what matches the search
+
+    std::vector<Row> rows;
+    std::set<juce::String> openPacks;
+    bool rowsChanged = false;
     juce::File selected;
     std::map<juce::String, std::pair<juce::int64, LibraryFilter::IrFacts>> irInfos;
     LibraryFilter::State filter;

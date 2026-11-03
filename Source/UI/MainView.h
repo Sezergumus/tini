@@ -201,13 +201,7 @@ public:
     // (the model / IR browser) gets the drop first and only adds it to the library.
     bool isInterestedInFileDrag (const juce::StringArray& paths) override
     {
-        for (const auto& path : paths)
-        {
-            FileLibrary::Kind kind;
-            if (FileLibrary::kindOfFile (juce::File (path), kind))
-                return true;
-        }
-        return false;
+        return FileLibrary::anythingToAdd (paths);
     }
 
     void fileDragEnter (const juce::StringArray&, int, int) override { setDropHighlight (true); }
@@ -231,13 +225,16 @@ public:
         juce::File model, ir;
         juce::Array<juce::File> pedals;
 
-        for (const auto& file : files)
+        const FileLibrary::Batch batch (files);   // zips and folders become packs
+
+        for (const auto& item : batch.items)
         {
+            const auto& file = item.file;
             FileLibrary::Kind kind;
             if (! FileLibrary::kindOfFile (file, kind))
                 continue;
 
-            auto imported = FileLibrary::importFile (file, kind);
+            auto imported = FileLibrary::importFile (file, kind, item.pack);
             if (! imported.existsAsFile())
                 imported = file;   // the library could not be written: use the file where it is
 

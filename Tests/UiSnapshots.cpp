@@ -1020,6 +1020,77 @@ void renderUiSnapshots (const juce::File& dir)
             report (! FileLibrary::kindOfFile (juce::File ("x.png"), kind), "other files belong nowhere");
         }
 
+        // packs: a zip becomes a folder of its own, a move keeps it, tidy up groups loose captures
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            using Kind = FileLibrary::Kind;
+
+            const auto zipFile = outside.getChildFile ("My Pack (1).zip");
+            {
+                juce::ZipFile::Builder builder;
+                builder.addFile (testModels.getChildFile ("test_wavenet.nam"), 9, "Inner/one.nam");
+                builder.addFile (testModels.getChildFile ("test_a2.nam"), 9, "Inner/two.nam");
+                juce::FileOutputStream out (zipFile);
+                out.setPosition (0);
+                out.truncate();
+                builder.writeToStream (out, nullptr);
+            }
+
+            const FileLibrary::Batch batch ({ zipFile });
+            report (batch.items.size() == 2 && batch.items[0].pack == "My Pack", "a zip is a pack named after it, without the (1)");
+
+            const auto done = FileLibrary::importBatch (batch, nullptr);
+            report (done.size() == 2 && FileLibrary::packOf (done[0].file, done[0].kind) == "My Pack"
+                        && done[0].file.getParentDirectory().getFileName() == "My Pack", "its files land in a pack folder");
+            report (FileLibrary::listTree (FileLibrary::libraryFolder (Kind::amps), "*.nam").size() == 2, "the library lists files inside packs");
+
+            const auto moved = FileLibrary::moveToKind (done[0].file, Kind::other);
+            report (moved.existsAsFile() && FileLibrary::packOf (moved, Kind::other) == "My Pack", "moving a model keeps its pack");
+            FileLibrary::moveToKind (done[1].file, Kind::other);
+            report (! FileLibrary::libraryFolder (Kind::amps).getChildFile ("My Pack").exists(), "an emptied pack folder is removed");
+
+            // tidy up: three loose captures of one gear go into a pack, one in the wrong section moves
+            FileLibrary::rootOverride().deleteRecursively();
+            FileLibrary::ensureFolders();
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto f = FileLibrary::libraryFolder (Kind::amps).getChildFile ("Plexi " + juce::String (i) + ".nam");
+                testModels.getChildFile ("test_wavenet.nam").copyFileTo (f);
+                NamMetadata::Info info;
+                info.make = "Marshall";
+                info.model = "Plexi";
+                info.gearType = "amp";
+                NamMetadata::write (f, info);
+            }
+            const auto stray = FileLibrary::libraryFolder (Kind::amps).getChildFile ("Fuzz.nam");
+            testModels.getChildFile ("test_a2.nam").copyFileTo (stray);
+            {
+                NamMetadata::Info info;
+                info.make = "Dunlop";
+                info.model = "Fuzz Face";
+                info.gearType = "pedal";
+                NamMetadata::write (stray, info);
+            }
+
+            const auto plan = FileLibrary::planTidy();
+            int toSection = 0, toPack = 0;
+            for (const auto& m : plan)
+            {
+                toSection += m.changesSection ? 1 : 0;
+                toPack += m.pack == "Marshall Plexi" ? 1 : 0;
+            }
+            report (toSection == 1 && toPack == 3, "tidy up plans one section move and one pack of three (" + juce::String ((int) plan.size()) + ")");
+
+            for (const auto& m : plan)
+                FileLibrary::moveTo (m.file, m.kind, m.pack);
+
+            report (FileLibrary::libraryFolder (Kind::pedals).getChildFile ("Fuzz.nam").existsAsFile()
+                        && FileLibrary::libraryFolder (Kind::amps).getChildFile ("Marshall Plexi").getChildFile ("Plexi 0.nam").existsAsFile(),
+                    "...and doing it puts the files there");
+            report (FileLibrary::planTidy().empty(), "a tidy library has nothing left to tidy");
+            FileLibrary::rootOverride().deleteRecursively();
+        }
+
         // dropped on the window: copied in and loaded
         {
             FileLibrary::rootOverride().deleteRecursively();
@@ -1464,8 +1535,9 @@ void renderUiSnapshots (const juce::File& dir)
 
                 const auto dropped = outside.getChildFile ("Fresh Fuzz.nam");
                 dropped.replaceWithText (withGear ("pedal"));
-                report (list.isInterestedInFileDrag ({ dropped.getFullPathName() }) && ! list.isInterestedInFileDrag ({ cabsFolder.getChildFile ("Cab 4x12.wav").getFullPathName() }),
-                        "the list accepts files of its own kind");
+                report (list.isInterestedInFileDrag ({ dropped.getFullPathName() }) && list.isInterestedInFileDrag ({ cabsFolder.getChildFile ("Cab 4x12.wav").getFullPathName() })
+                            && ! list.isInterestedInFileDrag ({ outside.getChildFile ("cover.png").getFullPathName() }),
+                        "the Library accepts models and impulse responses (it sorts them), nothing else");
                 list.filesDropped ({ dropped.getFullPathName() }, 0, 0);
                 settleLoop (100);
                 report (list.getNumFiles() == 3 && libPage.getSectionButton (Kind::pedals).getCount() == 3, "a dropped file is added to the section and counted");

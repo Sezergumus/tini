@@ -101,6 +101,7 @@ public:
             fileRenamed (oldFile, newFile);   // a model in use keeps being used from its new place
             countFiles();
         };
+        list.onFilesDropped = [this] (const juce::Array<juce::File>& dropped) { addSorted (dropped); };
         list.onDeleted = [this] (const juce::File&) { updateActions(); countFiles(); };
         list.onEdited = [this] (const juce::File&) { updateActions(); repaint(); };
         list.onAdded = [this] (const juce::Array<juce::File>&) { countFiles(); };
@@ -132,7 +133,11 @@ public:
         deleteButton.setButtonText ("Delete");
         deleteButton.onClick = [this] { if (list.getSelectedFile() != juce::File()) list.askDelete (list.getSelectedFile()); };
 
-        for (auto* b : { &addButton, &folderButton, &primaryButton, &secondaryButton, &renameButton, &revealButton, &deleteButton })
+        tidyButton.setButtonText ("Tidy up");
+        tidyButton.setTooltip ("Put models in the right section and keep captures of one make and model together in a pack");
+        tidyButton.onClick = [this] { askTidy(); };
+
+        for (auto* b : { &addButton, &tidyButton, &folderButton, &primaryButton, &secondaryButton, &renameButton, &revealButton, &deleteButton })
             addAndMakeVisible (b);
 
         sections[0]->setToggleState (true, juce::dontSendNotification);
@@ -265,6 +270,8 @@ public:
             column.removeFromTop (2);
         }
 
+        tidyButton.setBounds (column.removeFromBottom (30));
+
         auto right = rightArea();
         auto head = right.removeFromTop (headerHeight);
         folderButton.setBounds (head.removeFromRight (88).withSizeKeepingCentre (88, 28));
@@ -370,7 +377,7 @@ private:
     void countFiles()
     {
         for (auto k : FileLibrary::allKinds)
-            sectionFor (k).setCount (FileLibrary::list (FileLibrary::libraryFolder (k), FileLibrary::wildcardFor (k)).size());
+            sectionFor (k).setCount (FileLibrary::listTree (FileLibrary::libraryFolder (k), FileLibrary::wildcardFor (k)).size());
     }
 
     void runPrimary (const juce::File& file)
@@ -432,9 +439,9 @@ private:
         type in its metadata, an audio file is a cab); the section of the file that came first opens. */
     void chooseFilesToAdd()
     {
-        fileChooser = std::make_unique<juce::FileChooser> ("Add models (.nam) or impulse responses",
+        fileChooser = std::make_unique<juce::FileChooser> ("Add models (.nam), impulse responses or a zip pack",
                                                            FileLibrary::downloadsFolder(),
-                                                           FileLibrary::modelWildcard + ";" + FileLibrary::irWildcard);
+                                                           FileLibrary::modelWildcard + ";" + FileLibrary::irWildcard + ";*.zip");
 
         const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
                          | juce::FileBrowserComponent::canSelectMultipleItems;
@@ -447,35 +454,78 @@ private:
     }
 
 public:
-    /** Copies the files into the section they belong to. Returns how many came in. */
+    /** Copies the files into the section they belong to; zips and folders keep their captures together in
+        a pack folder. Returns how many came in. */
     int addSorted (const juce::Array<juce::File>& sources)
     {
-        int added = 0;
-        bool first = true;
-        Kind firstKind = section;
+        // a model without metadata goes where the open section is, if that is a model section
+        const FileLibrary::Batch batch (sources);
+        const auto done = FileLibrary::importBatch (batch, nullptr, FileLibrary::isModelKind (section) ? section : Kind::amps);
 
-        for (const auto& source : sources)
+        if (! done.empty())
         {
-            // a model without metadata goes where the open section is, if that is a model section
-            Kind kind;
-            if (! FileLibrary::kindOfFile (source, kind, FileLibrary::isModelKind (section) ? section : Kind::amps))
-                continue;
+            showSection (done.front().kind);
+            list.rescan();   // the section may be the one that was already open
+            countFiles();
+        }
 
-            if (FileLibrary::importFile (source, kind).existsAsFile())
+        return (int) done.size();
+    }
+
+    /** Looks for what is out of order (models in the wrong section, loose captures of one make and model) and
+        offers to put it right. */
+    void askTidy()
+    {
+        const auto moves = FileLibrary::planTidy();
+
+        int sections = 0, grouped = 0;
+        std::set<juce::String> packs;
+        for (const auto& m : moves)
+        {
+            sections += m.changesSection ? 1 : 0;
+            if (m.pack.isNotEmpty())
             {
-                ++added;
-                if (first)
-                {
-                    firstKind = kind;
-                    first = false;
-                }
+                ++grouped;
+                packs.insert (juce::String ((int) m.kind) + "|" + m.pack);
             }
         }
 
-        if (added > 0)
-            showSection (firstKind);
+        if (moves.empty())
+        {
+            auto info = std::make_unique<FormDialog> ("Tidy up", "Everything is in order: every model is in its section and nothing needs a pack.", "OK");
+            info->onSubmit = [] (FormDialog&) { return juce::Result::ok(); };
+            FormDialog::show (std::move (info), this);
+            return;
+        }
 
-        return added;
+        juce::StringArray lines;
+        if (sections > 0)
+            lines.add ("move " + juce::String (sections) + (sections == 1 ? " model" : " models") + " to the section its metadata says");
+        if (grouped > 0)
+            lines.add ("put " + juce::String (grouped) + " files into " + juce::String ((int) packs.size()) + (packs.size() == 1 ? " pack folder" : " pack folders"));
+
+        auto dialog = std::make_unique<FormDialog> ("Tidy up the library", "This will " + lines.joinIntoString (" and ") + ". Nothing is deleted.", "Tidy up");
+        dialog->onSubmit = [safe = juce::Component::SafePointer<LibraryPage> (this), moves] (FormDialog&)
+        {
+            if (safe != nullptr)
+                safe->applyTidy (moves);
+            return juce::Result::ok();
+        };
+        FormDialog::show (std::move (dialog), this);
+    }
+
+    void applyTidy (const std::vector<FileLibrary::TidyMove>& moves)
+    {
+        for (const auto& m : moves)
+        {
+            const auto moved = FileLibrary::moveTo (m.file, m.kind, m.pack);
+            if (moved.existsAsFile() && moved != m.file)
+                fileRenamed (m.file, moved);   // a model in use keeps being used from its new place
+        }
+
+        list.rescan();
+        countFiles();
+        updateActions();
     }
 
 private:
@@ -492,7 +542,7 @@ private:
     ModelList list;
     FilterBar filterBar;
     juce::TextEditor searchBox;
-    juce::TextButton addButton, folderButton, primaryButton, secondaryButton, renameButton, revealButton, deleteButton;
+    juce::TextButton addButton, tidyButton, folderButton, primaryButton, secondaryButton, renameButton, revealButton, deleteButton;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::String shownUsage;
 

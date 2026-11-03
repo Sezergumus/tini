@@ -163,19 +163,63 @@ namespace FileLibrary
         return false;
     }
 
-    /** Puts `source` into the library folder of `kind` and returns the copy; empty on failure. A file that
-        already sits in that folder is returned as it is. If a file of the same name exists, the same
-        content is reused, different content gets a numbered name ("name (2).nam"). */
-    inline juce::File importFile (const juce::File& source, Kind kind)
+    /** The first folder level under the library folder of `kind` is a pack (one download, one amp, ...).
+        Returns the pack of `file` ("" for a file that sits directly in the folder or outside it). */
+    inline juce::String packOf (const juce::File& file, Kind kind)
+    {
+        const auto base = libraryFolder (kind);
+        if (! file.isAChildOf (base))
+            return {};
+
+        auto folder = file.getParentDirectory();
+        while (folder != base && folder.getParentDirectory() != base && folder != folder.getParentDirectory())
+            folder = folder.getParentDirectory();
+
+        return folder == base ? juce::String() : folder.getFileName();
+    }
+
+    /** The library kind whose folder holds `file`; false if it is not in the library. */
+    inline bool kindHolding (const juce::File& file, Kind& kind)
+    {
+        for (auto k : allKinds)
+            if (file.isAChildOf (libraryFolder (k)))
+            {
+                kind = k;
+                return true;
+            }
+        return false;
+    }
+
+    /** A pack name that is safe as a folder name; "" if nothing is left of it. */
+    inline juce::String legalPackName (const juce::String& name)
+    {
+        return juce::File::createLegalFileName (name.trim()).trim();
+    }
+
+    /** The folder of a pack in `kind` ("" = the library folder itself). */
+    inline juce::File packFolder (Kind kind, const juce::String& pack)
+    {
+        const auto name = legalPackName (pack);
+        return name.isEmpty() ? libraryFolder (kind) : libraryFolder (kind).getChildFile (name);
+    }
+
+    /** Puts `source` into the library folder of `kind` (into the subfolder `pack`, if given) and returns the
+        copy; empty on failure. A file that already sits in the library folder of that kind is returned as it is.
+        If a file of the same name exists, the same content is reused, different content gets a numbered name
+        ("name (2).nam"). */
+    inline juce::File importFile (const juce::File& source, Kind kind, const juce::String& pack = {})
     {
         if (! source.existsAsFile())
             return {};
 
         ensureFolders();
-        const auto folder = libraryFolder (kind);
+        const auto folder = packFolder (kind, pack);
 
-        if (source.getParentDirectory() == folder)
+        if (source.getParentDirectory() == folder || source.isAChildOf (libraryFolder (kind)))
             return source;
+
+        if (! folder.createDirectory())
+            return {};
 
         auto target = folder.getChildFile (source.getFileName());
 
@@ -190,24 +234,44 @@ namespace FileLibrary
         return source.copyFileTo (target) ? target : juce::File();
     }
 
-    /** Moves a model to the folder of `kind` (a numbered name if the name is taken) and sets its gear type
-        to match, unless the type already belongs to that section. Returns the new file; empty on failure. */
-    inline juce::File moveToKind (const juce::File& file, Kind kind)
+    /** Deletes a pack folder that has nothing left in it (never the library folders themselves). */
+    inline void removeIfEmpty (const juce::File& folder)
+    {
+        for (auto k : allKinds)
+            if (folder == libraryFolder (k))
+                return;
+
+        if (folder.isDirectory() && folder.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 0)
+            folder.deleteFile();
+    }
+
+    /** Moves a library file to the folder of `kind` / `pack` (a numbered name if the name is taken). A model's
+        gear type is set to match the new section, unless it already belongs there. Returns the new file; empty
+        on failure. */
+    inline juce::File moveTo (const juce::File& file, Kind kind, const juce::String& pack)
     {
         if (! file.existsAsFile() || ! fits (file, kind))
             return {};
 
         ensureFolders();
-        auto target = libraryFolder (kind).getChildFile (file.getFileName());
+        const auto folder = packFolder (kind, pack);
+        auto target = folder.getChildFile (file.getFileName());
 
         if (target == file)
             return file;
 
+        if (! folder.createDirectory())
+            return {};
+
         if (target.existsAsFile())
             target = target.getNonexistentSibling (true);
 
+        const auto oldFolder = file.getParentDirectory();
+
         if (! file.moveFileTo (target))
             return {};
+
+        removeIfEmpty (oldFolder);
 
         if (isModelKind (kind))
         {
@@ -223,10 +287,23 @@ namespace FileLibrary
         return target;
     }
 
+    /** Moves a model to another section; its pack (if any) comes along. */
+    inline juce::File moveToKind (const juce::File& file, Kind kind)
+    {
+        Kind from = Kind::amps;
+        return moveTo (file, kind, kindHolding (file, from) ? packOf (file, from) : juce::String());
+    }
+
     /** Removes a library file: to the Recycle Bin / Trash (or for good when useTrash() is off). */
     inline bool removeFile (const juce::File& file)
     {
-        return useTrash() ? file.moveToTrash() : file.deleteFile();
+        const auto folder = file.getParentDirectory();
+        const bool gone = useTrash() ? file.moveToTrash() : file.deleteFile();
+
+        if (gone)
+            removeIfEmpty (folder);
+
+        return gone;
     }
 
     /** Renames `file` inside its folder, keeping the extension. Refuses empty names and names in use. */
@@ -251,5 +328,230 @@ namespace FileLibrary
 
         renamed = target;
         return juce::Result::ok();
+    }
+
+    //==========================================================================
+    // Packs: a download from tone3000 is a zip with dozens of captures. Dropping or adding the zip (or the
+    // folder it was unpacked to) keeps the captures together in a pack folder named after it.
+
+    constexpr int maxTreeEntries = 5000;
+
+    /** Every matching file under `folder`, packs included, by path. */
+    inline juce::Array<juce::File> listTree (const juce::File& folder, const juce::String& wildcard)
+    {
+        juce::Array<juce::File> files;
+
+        if (folder.isDirectory())
+        {
+            files = folder.findChildFiles (juce::File::findFiles, true, wildcard);
+
+            struct ByPath
+            {
+                static int compareElements (const juce::File& a, const juce::File& b)
+                {
+                    return a.getFullPathName().compareNatural (b.getFullPathName());
+                }
+            } byPath;
+            files.sort (byPath);
+
+            if (files.size() > maxTreeEntries)
+                files.removeRange (maxTreeEntries, files.size() - maxTreeEntries);
+        }
+
+        return files;
+    }
+
+    inline bool isUsable (const juce::File& file) { return file.hasFileExtension ("nam;wav;aif;aiff;flac"); }
+    inline bool isArchive (const juce::File& file) { return file.existsAsFile() && file.hasFileExtension ("zip"); }
+
+    /** True if dragging these paths could add something: a model, an impulse response, a zip or a folder. */
+    inline bool anythingToAdd (const juce::StringArray& paths)
+    {
+        for (const auto& path : paths)
+        {
+            const juce::File f (path);
+            if (f.isDirectory() || isArchive (f) || isUsable (f))
+                return true;
+        }
+        return false;
+    }
+
+    /** "Pack Name (1)" -> "Pack Name": browsers add that to a second download of the same file. */
+    inline juce::String cleanPackName (juce::String name)
+    {
+        name = name.trim();
+        if (name.endsWithChar (')'))
+        {
+            const int open = name.lastIndexOfChar ('(');
+            if (open > 0 && name.substring (open + 1, name.length() - 1).containsOnly ("0123456789"))
+                name = name.substring (0, open).trim();
+        }
+        return legalPackName (name);
+    }
+
+    /** The files behind a selection: zips are unpacked into a temporary folder (removed again with the batch),
+        folders are walked, and every model / impulse response is paired with the pack it belongs to.
+
+        A zip or a folder is a pack by its name. Loose files are one when two or more come from the same
+        folder (an unpacked download) - not for the Downloads folder or other everyday places. */
+    struct Batch
+    {
+        struct Item { juce::File file; juce::String pack; };
+
+        explicit Batch (const juce::Array<juce::File>& inputs)
+        {
+            std::map<juce::String, juce::Array<juce::File>> loose;
+
+            for (const auto& input : inputs)
+            {
+                if (input.isDirectory())
+                {
+                    addTree (input, cleanPackName (input.getFileName()));
+                }
+                else if (isArchive (input))
+                {
+                    if (temp == juce::File())
+                        temp = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("tini-import-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
+
+                    const auto target = temp.getChildFile (juce::String (++archives));
+                    juce::ZipFile zip (input);
+
+                    if (zip.getNumEntries() > 0 && target.createDirectory() && zip.uncompressTo (target).wasOk())
+                        addTree (target, cleanPackName (input.getFileNameWithoutExtension()));
+                }
+                else if (isUsable (input))
+                {
+                    loose[input.getParentDirectory().getFullPathName() + (input.hasFileExtension ("nam") ? "|m" : "|a")].add (input);
+                }
+            }
+
+            for (const auto& entry : loose)
+            {
+                const juce::File folder (entry.first.upToLastOccurrenceOf ("|", false, false));
+                const auto pack = entry.second.size() >= 2 && ! isEverydayFolder (folder)
+                                      ? cleanPackName (folder.getFileName()) : juce::String();
+
+                for (const auto& f : entry.second)
+                    items.push_back ({ f, pack });
+            }
+        }
+
+        ~Batch()
+        {
+            if (temp != juce::File())
+                temp.deleteRecursively();
+        }
+
+        std::vector<Item> items;
+
+    private:
+        static bool isEverydayFolder (const juce::File& folder)
+        {
+            for (auto place : { juce::File::userHomeDirectory, juce::File::userDocumentsDirectory,
+                                juce::File::userDesktopDirectory, juce::File::userMusicDirectory })
+                if (folder == juce::File::getSpecialLocation (place))
+                    return true;
+
+            return folder == downloadsFolder() || folder == folder.getParentDirectory();
+        }
+
+        void addTree (const juce::File& folder, const juce::String& pack)
+        {
+            for (const auto& f : folder.findChildFiles (juce::File::findFiles, true, "*"))
+                if (isUsable (f) && ! f.getFileName().startsWith ("._"))   // ._ files: macOS metadata inside zips
+                    items.push_back ({ f, pack });
+        }
+
+        juce::File temp;
+        int archives = 0;
+
+        JUCE_DECLARE_NON_COPYABLE (Batch)
+    };
+
+    struct Imported { juce::File file; Kind kind; };
+
+    /** Copies a batch into the library. `forced` puts every model / IR that fits it into that kind (a list that
+        belongs to one folder); without it each file goes where it belongs (see kindOfFile; a model without
+        metadata goes to `namDefault`). Anything that cannot be used is skipped. */
+    inline std::vector<Imported> importBatch (const Batch& batch, const Kind* forced, Kind namDefault = Kind::amps)
+    {
+        std::vector<Imported> done;
+
+        for (const auto& item : batch.items)
+        {
+            Kind kind = namDefault;
+
+            if (forced != nullptr)
+            {
+                if (! fits (item.file, *forced))
+                    continue;
+                kind = *forced;
+            }
+            else if (! kindOfFile (item.file, kind, namDefault))
+            {
+                continue;
+            }
+
+            const auto copy = importFile (item.file, kind, item.pack);
+            if (copy.existsAsFile())
+                done.push_back ({ copy, kind });
+        }
+
+        return done;
+    }
+
+    //==========================================================================
+    /** Tidy up: models in the wrong section go where their metadata says, and loose models that share a make
+        and model (three or more) are put into a pack folder of their own. */
+    struct TidyMove { juce::File file; Kind kind; juce::String pack; bool changesSection; };
+
+    inline std::vector<TidyMove> planTidy()
+    {
+        struct Candidate { TidyMove move; bool loose; };
+        std::vector<Candidate> all;
+        std::map<juce::String, std::vector<size_t>> groups;   // "kind|pack" -> candidates that would make it up
+
+        for (auto kind : { Kind::amps, Kind::pedals, Kind::other })
+        {
+            for (const auto& file : listTree (libraryFolder (kind), modelWildcard))
+            {
+                const auto info = NamMetadata::read (file);
+                Kind target = kind;
+                kindOfGearType (info.gearType, target);
+
+                Candidate c { { file, target, packOf (file, kind), target != kind }, false };
+                c.loose = c.move.pack.isEmpty();
+
+                if (c.loose)
+                {
+                    const auto make = info.make.trim(), model = info.model.trim();
+                    juce::String name = model.isEmpty() ? make
+                                      : (make.isEmpty() || make == model || model.startsWithIgnoreCase (make)) ? model
+                                      : make + " " + model;
+
+                    name = legalPackName (name);
+                    if (name.isNotEmpty())
+                    {
+                        groups[juce::String ((int) target) + "|" + name].push_back (all.size());
+                        c.move.pack = name;
+                    }
+                }
+
+                all.push_back (c);
+            }
+        }
+
+        for (const auto& group : groups)
+            if (group.second.size() < 3)
+                for (auto i : group.second)
+                    all[i].move.pack = {};
+
+        std::vector<TidyMove> needed;
+        for (const auto& c : all)
+            if (c.move.changesSection || (c.loose && c.move.pack.isNotEmpty()))
+                needed.push_back (c.move);
+
+        return needed;
     }
 }
