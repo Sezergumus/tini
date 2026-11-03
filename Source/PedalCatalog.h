@@ -16,6 +16,9 @@ namespace PedalCatalog
     /** Pedal types that existed when chain orders were first saved (before the Capture pedal). */
     constexpr int firstGenerationTypes = 7;
 
+    /** Type number of the Capture pedal (the last entry of all()). */
+    constexpr int captureType = 7;
+
     /** How many copies of each pedal type can be in the chain at once. Every copy has its own
         parameters, created up front (copy 0 keeps the plain ids, copy n >= 1 gets a "_<n+1>"
         suffix), so host automation keeps working while the chain itself stays dynamic. */
@@ -111,7 +114,7 @@ namespace PedalCatalog
             // a Neural Amp Modeler capture of a pedal; the model is chosen on its page
             { "CAPTURE",    "NAM PEDAL",      0xffe0825f, "CAP_ON",    "CAP_ADDED",    false,
               { { "INPUT",   "CAP_IN",    1, " dB" },   { "OUTPUT",  "CAP_OUT",   1, " dB" },
-                { "MIX",     "CAP_MIX",   0, " %" } }, "CAPTURE" },
+                { "MIX",     "CAP_MIX",   0, " %" } }, "NAM MODEL" },
         };
         jassert ((int) pedals.size() == count);
         return pedals;

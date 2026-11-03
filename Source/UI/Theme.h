@@ -49,7 +49,7 @@ namespace Theme
         if (category == "MODULATION") return juce::Colour (0xff5b9cf0);   // blue
         if (category == "TIME")       return juce::Colour (0xffe57fa8);   // pink
         if (category == "SPACE")      return juce::Colour (0xff4fc4b0);   // teal
-        if (category == "CAPTURE")    return juce::Colour (0xffe0825f);   // terracotta
+        if (category == "NAM MODEL")  return juce::Colour (0xffe0825f);   // terracotta
         return accent;
     }
 

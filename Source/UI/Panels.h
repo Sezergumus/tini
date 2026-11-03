@@ -165,13 +165,20 @@ public:
         repaint();
     }
 
+    /** A pedal whose value line is not its first knob (the Capture pedal shows its model's name). */
+    void setCustomDetail (const juce::String& text)
+    {
+        customDetail = true;
+        setDetail (text);
+    }
+
     std::function<void()> onRemove;
     std::function<void()> onClick;   // set for tiles that handle their own click (the cab)
 
     /** Called from the UI timer so host automation of the bypass state and the knob is reflected too. */
     bool refresh()
     {
-        if (isPedalBlock())
+        if (isPedalBlock() && ! customDetail)
             updateDetail();
 
         const bool now = isActive();
@@ -260,7 +267,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     juce::Colour tint;
     juce::String title, detail;
-    bool selected = false, hover = false, lastActive = true;
+    bool selected = false, hover = false, lastActive = true, customDetail = false;
 
     TileDot dot;
     RemoveButton removeButton;
@@ -967,6 +974,21 @@ private:
         }
 
         strip.getAmpTile().setDetail (amp);
+
+        // a Capture pedal shows the name of its model
+        for (auto* tile : strip.pedals)
+        {
+            if (PedalCatalog::typeOf (tile->getItem()) != PedalCatalog::captureType)
+                continue;
+
+            const auto& engine = processor.pedalNam[(size_t) PedalCatalog::copyOf (tile->getItem())];
+            using State = NamEngine::Status::State;
+            const auto state = engine.getStatus().state;
+            tile->setCustomDetail (state == State::ready   ? engine.getModelInfo().name
+                                   : state == State::loading ? juce::String ("Loading...")
+                                                             : juce::String ("No model"));
+        }
+
         cabTile.setDetail (processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getFileNameWithoutExtension()
                                                                  : juce::String ("No IR"));
     }

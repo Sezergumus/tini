@@ -8,26 +8,51 @@
 #include "FileBrowser.h"
 
 //==============================================================================
+/** What a ModelSlot works on: a NAM engine of the processor and how to load / clear it. The amp slot
+    and every Capture pedal copy have one. */
+struct ModelTarget
+{
+    NamEngine& engine;
+    std::function<void (const juce::File&)> load;
+    std::function<void()> unload;
+    FileLibrary::Kind kind = FileLibrary::Kind::amps;   // which library folder it browses
+    juce::String levelParam;                            // "Level match" switch; empty = none
+    juce::String emptyHint = "Load a .nam file to use it as the amp";
+};
+
 /** One line that shows a Neural Amp Modeler model: its name, a short detail line (training rate,
     loudness, loading or error state) and the buttons to load, clear and level-match it.
-    Reusable for any slot that holds a NAM model. */
+    Works for any slot that holds a NAM model (see ModelTarget). */
 class ModelSlot : public juce::Component
 {
 public:
     static constexpr int height = 52;
 
-    explicit ModelSlot (NeuralFlowAmpAudioProcessor& p) : processor (p)
+    /** The amp slot of the processor. */
+    explicit ModelSlot (NeuralFlowAmpAudioProcessor& p)
+        : ModelSlot (p, ModelTarget { p.nam,
+                                      [&p] (const juce::File& f) { p.loadNamModel (f); },
+                                      [&p] { p.unloadNamModel(); },
+                                      FileLibrary::Kind::amps, "NAM_NORM",
+                                      "Load a .nam file to use it as the amp" })
+    {
+    }
+
+    ModelSlot (NeuralFlowAmpAudioProcessor& p, ModelTarget modelTarget)
+        : processor (p), target (std::move (modelTarget))
     {
         loadButton.setButtonText ("Load model");
         loadButton.onClick = [this] { chooseFile(); };
 
         clearButton.setButtonText ("Clear");
-        clearButton.onClick = [this] { processor.unloadNamModel(); refresh(); };
+        clearButton.onClick = [this] { target.unload(); refresh(); };
 
         levelButton.setButtonText ("Level match");
         levelButton.setTooltip ("Level every model to the same loudness (-18 dB)");
         levelButton.setClickingTogglesState (true);
-        levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "NAM_NORM", levelButton);
+        if (target.levelParam.isNotEmpty())
+            levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, target.levelParam, levelButton);
+        levelButton.setVisible (target.levelParam.isNotEmpty());
 
         prevButton.setTooltip ("Previous model in this folder");
         nextButton.setTooltip ("Next model in this folder");
@@ -40,8 +65,11 @@ public:
         browseButton.setToggleState (true, juce::dontSendNotification);
         browseButton.onClick = [this] { if (onBrowseToggled) onBrowseToggled(); };
 
-        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &clearButton, &levelButton, &browseButton, &prevButton, &nextButton })
+        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &clearButton, &browseButton, &prevButton, &nextButton })
             addAndMakeVisible (b);
+
+        if (target.levelParam.isNotEmpty())
+            addAndMakeVisible (levelButton);
 
         refresh();
     }
@@ -56,7 +84,7 @@ public:
         if (! file.existsAsFile())
             return;
 
-        processor.loadNamModel (file);
+        target.load (file);
         if (onModelPicked)
             onModelPicked();   // picking a model means the user wants to hear it
         refresh();
@@ -68,17 +96,17 @@ public:
     /** Called from the UI timer: follows the model's loading state. */
     void refresh()
     {
-        const auto status = processor.nam.getStatus();
-        const auto info = processor.nam.getModelInfo();
+        const auto status = target.engine.getStatus();
+        const auto info = target.engine.getModelInfo();
 
         juce::String name, detail;
         using State = NamEngine::Status::State;
 
         switch (status.state)
         {
-            case State::empty:   name = "No model loaded"; detail = "Load a .nam file to use it as the amp"; break;
-            case State::loading: name = processor.nam.getFile().getFileNameWithoutExtension(); detail = "Loading..."; break;
-            case State::failed:  name = processor.nam.getFile().getFileName(); detail = "Could not load: " + status.message.upToFirstOccurrenceOf ("\n", false, false); break;
+            case State::empty:   name = "No model loaded"; detail = target.emptyHint; break;
+            case State::loading: name = target.engine.getFile().getFileNameWithoutExtension(); detail = "Loading..."; break;
+            case State::failed:  name = target.engine.getFile().getFileName(); detail = "Could not load: " + status.message.upToFirstOccurrenceOf ("\n", false, false); break;
             case State::ready:
             {
                 name = info.name;
@@ -107,7 +135,7 @@ public:
     {
         Theme::drawInset (g, getLocalBounds().toFloat(), 8.0f);
 
-        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (buttonsWidth + 12);
+        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (buttonsWidth() + 12);
         auto top = text.removeFromTop (text.getHeight() / 2);
 
         g.setColour (hasModel ? Theme::textHi : Theme::textMid);
@@ -124,8 +152,11 @@ public:
         auto buttons = getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30);
         clearButton.setBounds (buttons.removeFromRight (64));
         buttons.removeFromRight (6);
-        levelButton.setBounds (buttons.removeFromRight (96));
-        buttons.removeFromRight (6);
+        if (levelButton.isVisible())
+        {
+            levelButton.setBounds (buttons.removeFromRight (96));
+            buttons.removeFromRight (6);
+        }
         loadButton.setBounds (buttons.removeFromRight (100));
         buttons.removeFromRight (6);
         browseButton.setBounds (buttons.removeFromRight (72));
@@ -139,20 +170,24 @@ public:
     StepButton prevButton { false, "model_prev" }, nextButton { true, "model_next" };
 
 private:
-    static constexpr int buttonsWidth = 100 + 96 + 64 + 72 + 56 + 5 * 6 + 12;
+    int buttonsWidth() const
+    {
+        const bool level = target.levelParam.isNotEmpty();
+        return 100 + (level ? 96 : 0) + 64 + 72 + 56 + (level ? 5 : 4) * 6 + 12;
+    }
 
     /** The model before / after the loaded one in its folder. */
     void step (int delta)
     {
-        const auto file = FileLibrary::neighbour (processor.nam.getFile(), FileLibrary::Kind::amps, delta);
-        if (file.existsAsFile() && file != processor.nam.getFile())
+        const auto file = FileLibrary::neighbour (target.engine.getFile(), target.kind, delta);
+        if (file.existsAsFile() && file != target.engine.getFile())
             loadFile (file);
     }
 
     void chooseFile()
     {
-        const auto current = processor.nam.getFile();
-        const auto library = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
+        const auto current = target.engine.getFile();
+        const auto library = FileLibrary::libraryFolder (target.kind);
         fileChooser = std::make_unique<juce::FileChooser> ("Select a Neural Amp Modeler model (.nam)",
                                                            current.existsAsFile() ? current.getParentDirectory()
                                                            : library.isDirectory() ? library
@@ -167,13 +202,14 @@ private:
             const auto picked = fc.getResult();
             if (safe != nullptr && picked.existsAsFile())
             {
-                const auto imported = FileLibrary::importFile (picked, FileLibrary::Kind::amps);
+                const auto imported = FileLibrary::importFile (picked, safe->target.kind);
                 safe->loadFile (imported.existsAsFile() ? imported : picked);
             }
         });
     }
 
     NeuralFlowAmpAudioProcessor& processor;
+    ModelTarget target;
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> levelAttachment;
 
@@ -508,10 +544,63 @@ public:
 
 //==============================================================================
 /** A pedal: its name and category, the bypass switch and one knob per parameter, all in the colour
-    of the pedal's category. */
+    of the pedal's category. The Capture pedal also shows its model slot and the list of pedal captures. */
 class PedalPage : public juce::Component
 {
 public:
+    PedalPage (int chainItem, NeuralFlowAmpAudioProcessor& processor)
+        : PedalPage (chainItem, processor.apvts)
+    {
+        if (PedalCatalog::typeOf (chainItem) != PedalCatalog::captureType)
+            return;
+
+        const auto copy = PedalCatalog::copyOf (chainItem);
+        auto& engine = processor.pedalNam[(size_t) copy];
+
+        modelSlot = std::make_unique<ModelSlot> (processor,
+            ModelTarget { engine,
+                          [&processor, copy] (const juce::File& f) { processor.loadPedalModel (copy, f); },
+                          [&processor, copy] { processor.unloadPedalModel (copy); },
+                          FileLibrary::Kind::pedals, {},
+                          "Load a .nam capture of a pedal" });
+        modelSlot->onBrowseToggled = [this] { resized(); refresh(); };
+        addAndMakeVisible (*modelSlot);
+
+        browser = std::make_unique<FileBrowserList> (FileLibrary::Kind::pedals);
+        browser->onPick = [this] (const juce::File& file) { modelSlot->loadFile (file); };
+        browser->onRenamed = [&processor, copy] (const juce::File& oldFile, const juce::File& newFile)
+        {
+            if (processor.pedalNam[(size_t) copy].getFile() == oldFile)
+                processor.loadPedalModel (copy, newFile);   // keep the loaded model; only its path changed
+        };
+        addAndMakeVisible (*browser);
+        captureEngine = &engine;
+
+        refresh();
+    }
+
+    /** Called from the UI timer: follows the model's loading state and the list's folder. */
+    void refresh()
+    {
+        if (modelSlot == nullptr)
+            return;
+
+        modelSlot->refresh();
+
+        const bool showBrowser = modelSlot->isBrowseOpen();
+        if (browser->isVisible() != showBrowser)
+            browser->setVisible (showBrowser);
+
+        if (showBrowser && captureEngine->getFile() != browsedFile)
+        {
+            browsedFile = captureEngine->getFile();
+            browser->setCurrentFile (browsedFile);
+        }
+    }
+
+    ModelSlot* getModelSlot() { return modelSlot.get(); }
+    FileBrowserList* getBrowser() { return browser.get(); }
+
     PedalPage (int chainItem, juce::AudioProcessorValueTreeState& state)
         : item (chainItem), info (PedalCatalog::pedalOf (chainItem)),
           title (Theme::titleCase (PedalCatalog::displayName (chainItem))),
@@ -560,6 +649,18 @@ public:
         auto header = b.removeFromTop (headerHeight);
         bypass.setBounds (header.removeFromRight (44).withSizeKeepingCentre (44, 28));
 
+        if (modelSlot != nullptr)
+        {
+            modelSlot->setBounds (b.removeFromTop (ModelSlot::height));
+            b.removeFromTop (8);
+
+            if (modelSlot->isBrowseOpen())
+            {
+                browser->setBounds (b.removeFromRight (300));
+                b.removeFromRight (16);
+            }
+        }
+
         const int n = knobs.size();
         if (n == 0)
             return;
@@ -582,6 +683,12 @@ private:
     ToggleSwitch bypass;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
     juce::OwnedArray<LabeledKnob> knobs;
+
+    // Capture pedal only
+    std::unique_ptr<ModelSlot> modelSlot;
+    std::unique_ptr<FileBrowserList> browser;
+    NamEngine* captureEngine = nullptr;
+    juce::File browsedFile;
 };
 
 //==============================================================================
@@ -693,7 +800,7 @@ public:
         const bool isPedal = block != PedalCatalog::ampItem && block != cabBlock;
         if (isPedal)
         {
-            pedalPage = std::make_unique<PedalPage> (block, processor.apvts);
+            pedalPage = std::make_unique<PedalPage> (block, processor);
             addAndMakeVisible (*pedalPage);
         }
 
@@ -748,6 +855,8 @@ public:
             ampPage.refresh();
         if (cabPage.isVisible())
             cabPage.refresh();
+        if (pedalPage != nullptr && pedalPage->isVisible())
+            pedalPage->refresh();
     }
 
     void paint (juce::Graphics& g) override

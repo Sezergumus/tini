@@ -1065,6 +1065,57 @@ void renderUiSnapshots (const juce::File& dir)
             settle();
         }
 
+        // Capture pedal: its page has a model slot and the list of the Pedals folder
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            FileLibrary::ensureFolders();
+            const auto pedalsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::pedals);
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (pedalsFolder.getChildFile ("Green Drive.nam"));
+            testModels.getChildFile ("test_a2.nam").copyFileTo (pedalsFolder.getChildFile ("Fuzz Face.nam"));
+
+            setParam (p, "CAP_ADDED", 1.0f);
+            settle();
+
+            view->getChain().select (PedalCatalog::captureType);
+            settleLoop (200);
+            auto* page = blocks3.getPedalPage();
+            report (page != nullptr && page->getModelSlot() != nullptr && page->getBrowser() != nullptr, "the Capture pedal's page has a model slot and a list");
+            report (page != nullptr && page->getBrowser()->isVisible() && page->getBrowser()->getKind() == FileLibrary::Kind::pedals
+                        && page->getBrowser()->getFolder() == pedalsFolder && page->getBrowser()->getNumFiles() == 2,
+                    "...the list shows the Pedals folder");
+            save (*editor, dir.getChildFile ("ui_page_capture_empty.png"));
+
+            if (page != nullptr && page->getModelSlot() != nullptr)
+            {
+                page->getBrowser()->onPick (pedalsFolder.getChildFile ("Green Drive.nam"));
+                for (int i = 0; i < 300 && p.pedalNam[0].getStatus().state == NamEngine::Status::State::loading; ++i)
+                    settleLoop (10);
+                settleLoop (300);
+
+                report (p.pedalNam[0].getFile() == pedalsFolder.getChildFile ("Green Drive.nam") && p.pedalNam[0].hasModel(),
+                        "picking a line loads the capture into this pedal");
+                report (! p.nam.hasModel(), "...and not into the amp");
+
+                bool tileShowsName = false;
+                for (auto* tile : view->getChain().getStrip().pedals)
+                    if (tile->getItem() == PedalCatalog::captureType)
+                        tileShowsName = tile->getDetail().isNotEmpty() && tile->getDetail() != "No model";
+                report (tileShowsName, "the pedal's tile shows the model name");
+                save (*editor, dir.getChildFile ("ui_page_capture.png"));
+
+                page->getModelSlot()->nextButton.triggerClick();
+                settleLoop (100);   // a click is delivered by the message loop
+                for (int i = 0; i < 300 && p.pedalNam[0].getStatus().state == NamEngine::Status::State::loading; ++i)
+                    settleLoop (10);
+                report (p.pedalNam[0].getFile() == pedalsFolder.getChildFile ("Green Drive.nam") ? false : p.pedalNam[0].getFile().existsAsFile(),
+                        "the arrows step through the Pedals folder (" + p.pedalNam[0].getFile().getFileName() + ")");
+            }
+
+            setParam (p, "CAP_ADDED", 0.0f);
+            p.unloadPedalModel (0);
+            settle();
+        }
+
         FileLibrary::rootOverride().deleteRecursively();
         outside.deleteRecursively();
     }
