@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 project(Tini VERSION 0.1.0)
 
+# Link the Visual C++ runtime statically so the exe and the VST3 start on a PC that has no
+# "Visual C++ Redistributable" installed. Set before any target exists so JUCE, the NAM core and
+# the tests all get the same runtime (mixing the two kinds fails at link time).
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # JUCE library is automatically downloaded from GitHub
 include(FetchContent)
 FetchContent_Declare(
