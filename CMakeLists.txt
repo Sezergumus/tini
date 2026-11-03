@@ -95,6 +95,7 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/UI/HeaderButtons.h
     Source/UI/SettingsPage.h
     Source/UI/TunerView.h
+    Source/UI/FileBrowser.h
     Source/DSP/PitchDetector.h
     Source/StandaloneHooks.h
     Source/UI/MainView.h

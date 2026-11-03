@@ -156,6 +156,42 @@ private:
 };
 
 //==============================================================================
+/** Previous / next arrow (presets, models, impulse responses). */
+class StepButton : public juce::Button
+{
+public:
+    explicit StepButton (bool pointsRight, const juce::String& name = {})
+        : juce::Button (name.isNotEmpty() ? name : (pointsRight ? "preset_next" : "preset_prev")), right (pointsRight)
+    {
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (0.5f);
+
+        if (highlighted || down)
+        {
+            g.setColour (juce::Colours::white.withAlpha (down ? 0.12f : 0.07f));
+            g.fillRoundedRectangle (r, 6.0f);
+        }
+
+        const auto c = r.getCentre();
+        const float dx = right ? 2.5f : -2.5f;
+        juce::Path chevron;
+        chevron.startNewSubPath (c.x - dx, c.y - 5.0f);
+        chevron.lineTo (c.x + dx, c.y);
+        chevron.lineTo (c.x - dx, c.y + 5.0f);
+
+        g.setColour (highlighted ? Theme::textHi : Theme::textMid);
+        g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+private:
+    bool right;
+};
+
+//==============================================================================
 /** Slim horizontal peak meter: a label on the left, a thin bar, small dB marks under it. One colour,
     a small peak-hold tick, red only while it clips. */
 class LevelMeter : public juce::Component

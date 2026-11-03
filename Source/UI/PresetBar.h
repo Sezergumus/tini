@@ -2,6 +2,7 @@
 
 #include "../PluginProcessor.h"
 #include "Theme.h"
+#include "Widgets.h"
 #include "PresetList.h"
 
 //==============================================================================
@@ -152,41 +153,6 @@ private:
     juce::String hint;
     juce::Colour hintColour = Theme::textLo;
     juce::Rectangle<int> hintArea;
-};
-
-//==============================================================================
-/** Previous / next arrow. */
-class StepButton : public juce::Button
-{
-public:
-    explicit StepButton (bool pointsRight) : juce::Button (pointsRight ? "preset_next" : "preset_prev"), right (pointsRight)
-    {
-        setMouseCursor (juce::MouseCursor::PointingHandCursor);
-    }
-
-    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
-    {
-        auto r = getLocalBounds().toFloat().reduced (0.5f);
-
-        if (highlighted || down)
-        {
-            g.setColour (juce::Colours::white.withAlpha (down ? 0.12f : 0.07f));
-            g.fillRoundedRectangle (r, 6.0f);
-        }
-
-        const auto c = r.getCentre();
-        const float dx = right ? 2.5f : -2.5f;
-        juce::Path chevron;
-        chevron.startNewSubPath (c.x - dx, c.y - 5.0f);
-        chevron.lineTo (c.x + dx, c.y);
-        chevron.lineTo (c.x - dx, c.y + 5.0f);
-
-        g.setColour (highlighted ? Theme::textHi : Theme::textMid);
-        g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-private:
-    bool right;
 };
 
 /** The preset name: plain text in the header. Click it to open the list; it lights up on hover. */

@@ -711,6 +711,137 @@ void renderUiSnapshots (const juce::File& dir)
     }
 
     //==========================================================================
+    // Model / IR browser: the list of the loaded file's folder, the arrows and the Browse switch.
+    if (blocks != nullptr)
+    {
+        const auto libDir = dir.getChildFile ("library_tmp");
+        libDir.deleteRecursively();
+        libDir.createDirectory();
+
+        const auto testModels = juce::File (__FILE__).getParentDirectory().getChildFile ("models");
+        const auto alpha = libDir.getChildFile ("Alpha Clean.nam");
+        const auto beta  = libDir.getChildFile ("Beta Crunch.nam");
+        testModels.getChildFile ("test_wavenet.nam").copyFileTo (alpha);
+        testModels.getChildFile ("test_a2.nam").copyFileTo (beta);
+        libDir.getChildFile ("notes.txt").replaceWithText ("not a model");
+
+        auto waitForModel = [&]
+        {
+            for (int i = 0; i < 300 && p.nam.getStatus().state == NamEngine::Status::State::loading; ++i)
+                settleLoop (10);
+            settle();
+        };
+
+        auto& amp = blocks->getAmpPage();
+        blocks->show (PedalCatalog::ampItem);
+        p.unloadNamModel();
+        setParam (p, "AMP_TYPE", 1.0f);
+        p.loadNamModel (alpha);
+        waitForModel();
+        settleLoop (200);
+
+        report (amp.browser.isVisible(), "the model list is open in NAM mode");
+        report (amp.browser.getFolder() == libDir, "it shows the folder of the loaded model");
+        report (amp.browser.getNumFiles() == 2, "it lists the .nam files and nothing else (" + juce::String (amp.browser.getNumFiles()) + ")");
+        report (amp.browser.getNumFiles() == 2 && amp.browser.getFile (0) == alpha && amp.browser.getFile (1) == beta, "...sorted by name");
+        save (*editor, dir.getChildFile ("ui_amp_nam_browser.png"));
+
+        // picking a line loads that model
+        if (amp.browser.getNumFiles() == 2)
+        {
+            amp.browser.onPick (beta);
+            waitForModel();
+            report (p.nam.getFile() == beta && p.nam.hasModel(), "picking a line loads that model");
+
+            // the arrows go to the next / previous model in the folder, wrapping around
+            amp.modelSlot.nextButton.triggerClick();
+            waitForModel();
+            report (p.nam.getFile() == alpha, "the next arrow wraps to the first model");
+            amp.modelSlot.prevButton.triggerClick();
+            waitForModel();
+            report (p.nam.getFile() == beta, "the previous arrow wraps to the last model");
+        }
+
+        // the Browse switch hides the list and gives the width back to the knobs
+        const int widthWithList = amp.getDriveKnob().getWidth() + amp.getInputKnob().getWidth();
+        amp.modelSlot.browseButton.triggerClick();
+        settleLoop (100);
+        report (! amp.browser.isVisible(), "Browse switches the list off");
+        report (amp.getInputKnob().getWidth() + amp.getDriveKnob().getWidth() > widthWithList,
+                "...and the knobs get the room");
+        save (*editor, dir.getChildFile ("ui_amp_nam_browser_closed.png"));
+        amp.modelSlot.browseButton.triggerClick();
+        settleLoop (100);
+        report (amp.browser.isVisible(), "...and on again");
+
+        // built-in mode has no list
+        setParam (p, "AMP_TYPE", 0.0f);
+        settle();
+        report (! amp.browser.isVisible(), "the built-in amp has no model list");
+        p.unloadNamModel();
+
+        // impulse responses
+        auto writeIr = [&] (const juce::File& file, float gain)
+        {
+            juce::WavAudioFormat wav;
+            file.deleteFile();
+            std::unique_ptr<juce::FileOutputStream> out (file.createOutputStream());
+            if (out == nullptr)
+                return;
+            std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (out.get(), 48000.0, 1, 16, {}, 0));
+            if (writer == nullptr)
+                return;
+            out.release();
+
+            juce::AudioBuffer<float> ir (1, 256);
+            ir.clear();
+            ir.setSample (0, 0, gain);
+            ir.setSample (0, 40, gain * 0.4f);
+            writer->writeFromAudioSampleBuffer (ir, 0, ir.getNumSamples());
+        };
+
+        const auto irDir = dir.getChildFile ("library_tmp").getChildFile ("IRs");
+        irDir.createDirectory();
+        const auto irA = irDir.getChildFile ("Cab 4x12.wav");
+        const auto irB = irDir.getChildFile ("Cab 1x12.wav");
+        writeIr (irA, 0.8f);
+        writeIr (irB, 0.6f);
+
+        p.loadImpulseResponse (irA);
+        blocks->show (cabBlock);
+        settleLoop (300);
+        auto& cab = blocks->getCabPage();
+
+        report (cab.browser.isVisible() && cab.browser.getFolder() == irDir, "the cab page lists the folder of the loaded IR");
+        report (cab.browser.getNumFiles() == 2, "...with both impulse responses (" + juce::String (cab.browser.getNumFiles()) + ")");
+        report (cab.browser.getNumFiles() == 2 && cab.browser.getFile (0) == irB, "...sorted by name");
+        save (*editor, dir.getChildFile ("ui_cab_browser.png"));
+
+        cab.browser.onPick (irB);
+        settleLoop (200);
+        report (p.loadedIrFile == irB, "picking an impulse response loads it");
+
+        cab.irSlot.nextButton.triggerClick();
+        settleLoop (200);
+        report (p.loadedIrFile == irA, "the next arrow goes on to the next IR");
+        cab.irSlot.prevButton.triggerClick();
+        settleLoop (200);
+        report (p.loadedIrFile == irB, "the previous arrow goes back");
+
+        cab.irSlot.browseButton.triggerClick();
+        settleLoop (100);
+        report (! cab.browser.isVisible(), "Browse hides the IR list");
+        save (*editor, dir.getChildFile ("ui_cab_browser_closed.png"));
+        cab.irSlot.browseButton.triggerClick();
+        settleLoop (100);
+        report (cab.browser.isVisible(), "...and shows it again");
+
+        blocks->show (PedalCatalog::ampItem);
+        settle();
+        libDir.deleteRecursively();
+    }
+
+    //==========================================================================
     // Tuner: the footer button opens it, the processor collects input only while it is open.
     if (auto* view = findFirst<MainView> (*editor))
     {

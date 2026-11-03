@@ -5,6 +5,7 @@
 #include "Theme.h"
 #include "Widgets.h"
 #include "Panels.h"
+#include "FileBrowser.h"
 
 //==============================================================================
 /** One line that shows a Neural Amp Modeler model: its name, a short detail line (training rate,
@@ -28,9 +29,36 @@ public:
         levelButton.setClickingTogglesState (true);
         levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "NAM_NORM", levelButton);
 
-        for (auto* b : { &loadButton, &clearButton, &levelButton })
+        prevButton.setTooltip ("Previous model in this folder");
+        nextButton.setTooltip ("Next model in this folder");
+        prevButton.onClick = [this] { step (-1); };
+        nextButton.onClick = [this] { step (+1); };
+
+        browseButton.setButtonText ("Browse");
+        browseButton.setTooltip ("Show the models in this folder");
+        browseButton.setClickingTogglesState (true);
+        browseButton.setToggleState (true, juce::dontSendNotification);
+        browseButton.onClick = [this] { if (onBrowseToggled) onBrowseToggled(); };
+
+        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &clearButton, &levelButton, &browseButton, &prevButton, &nextButton })
             addAndMakeVisible (b);
 
+        refresh();
+    }
+
+    /** Called when the Browse button was switched. */
+    std::function<void()> onBrowseToggled;
+    bool isBrowseOpen() const { return browseButton.getToggleState(); }
+
+    /** Loads a model file (from the dialog, the arrows or the browser list). */
+    void loadFile (const juce::File& file)
+    {
+        if (! file.existsAsFile())
+            return;
+
+        processor.loadNamModel (file);
+        if (onModelPicked)
+            onModelPicked();   // picking a model means the user wants to hear it
         refresh();
     }
 
@@ -99,13 +127,27 @@ public:
         levelButton.setBounds (buttons.removeFromRight (96));
         buttons.removeFromRight (6);
         loadButton.setBounds (buttons.removeFromRight (100));
+        buttons.removeFromRight (6);
+        browseButton.setBounds (buttons.removeFromRight (72));
+        buttons.removeFromRight (6);
+        nextButton.setBounds (buttons.removeFromRight (28));
+        prevButton.setBounds (buttons.removeFromRight (28));
     }
 
     // exposed so tests can drive them
-    juce::TextButton loadButton, clearButton, levelButton;
+    juce::TextButton loadButton, clearButton, levelButton, browseButton;
+    StepButton prevButton { false, "model_prev" }, nextButton { true, "model_next" };
 
 private:
-    static constexpr int buttonsWidth = 100 + 96 + 64 + 12;
+    static constexpr int buttonsWidth = 100 + 96 + 64 + 72 + 56 + 5 * 6 + 12;
+
+    /** The model before / after the loaded one in its folder. */
+    void step (int delta)
+    {
+        const auto file = FileLibrary::neighbour (processor.nam.getFile(), true, delta);
+        if (file.existsAsFile() && file != processor.nam.getFile())
+            loadFile (file);
+    }
 
     void chooseFile()
     {
@@ -120,14 +162,8 @@ private:
 
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<ModelSlot> (this)] (const juce::FileChooser& fc)
         {
-            const auto file = fc.getResult();
-            if (safe == nullptr || ! file.existsAsFile())
-                return;
-
-            safe->processor.loadNamModel (file);
-            if (safe->onModelPicked)
-                safe->onModelPicked();   // picking a model means the user wants to hear it
-            safe->refresh();
+            if (safe != nullptr)
+                safe->loadFile (fc.getResult());
         });
     }
 
@@ -151,9 +187,36 @@ public:
     {
         loadButton.setButtonText ("Load IR");
         loadButton.onClick = [this] { chooseFile(); };
-        addAndMakeVisible (loadButton);
+
+        prevButton.setTooltip ("Previous impulse response in this folder");
+        nextButton.setTooltip ("Next impulse response in this folder");
+        prevButton.onClick = [this] { step (-1); };
+        nextButton.onClick = [this] { step (+1); };
+
+        browseButton.setButtonText ("Browse");
+        browseButton.setTooltip ("Show the impulse responses in this folder");
+        browseButton.setClickingTogglesState (true);
+        browseButton.setToggleState (true, juce::dontSendNotification);
+        browseButton.onClick = [this] { if (onBrowseToggled) onBrowseToggled(); };
+
+        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &browseButton, &prevButton, &nextButton })
+            addAndMakeVisible (b);
 
         refresh();
+    }
+
+    /** Called when the Browse button was switched. */
+    std::function<void()> onBrowseToggled;
+    bool isBrowseOpen() const { return browseButton.getToggleState(); }
+
+    /** Loads an impulse response (from the dialog, the arrows or the browser list). */
+    void loadFile (const juce::File& file)
+    {
+        if (! file.existsAsFile())
+            return;
+
+        processor.loadImpulseResponse (file);
+        showFile (file);
     }
 
     /** Called from the UI timer: a preset or session may have loaded another IR. */
@@ -167,7 +230,7 @@ public:
     {
         Theme::drawInset (g, getLocalBounds().toFloat(), 8.0f);
 
-        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (loadButton.getWidth() + 22);
+        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (buttonsWidth + 12);
         auto top = text.removeFromTop (text.getHeight() / 2);
 
         g.setColour (shownFile.existsAsFile() ? Theme::textHi : Theme::textMid);
@@ -182,12 +245,29 @@ public:
 
     void resized() override
     {
-        loadButton.setBounds (getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30).removeFromRight (84));
+        auto buttons = getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30);
+        loadButton.setBounds (buttons.removeFromRight (84));
+        buttons.removeFromRight (6);
+        browseButton.setBounds (buttons.removeFromRight (72));
+        buttons.removeFromRight (6);
+        nextButton.setBounds (buttons.removeFromRight (28));
+        prevButton.setBounds (buttons.removeFromRight (28));
     }
 
-    juce::TextButton loadButton;
+    juce::TextButton loadButton, browseButton;
+    StepButton prevButton { false, "ir_prev" }, nextButton { true, "ir_next" };
 
 private:
+    static constexpr int buttonsWidth = 84 + 72 + 56 + 3 * 6 + 12;
+
+    /** The impulse response before / after the loaded one in its folder. */
+    void step (int delta)
+    {
+        const auto file = FileLibrary::neighbour (processor.loadedIrFile, false, delta);
+        if (file.existsAsFile() && file != processor.loadedIrFile)
+            loadFile (file);
+    }
+
     void chooseFile()
     {
         fileChooser = std::make_unique<juce::FileChooser> ("Select an impulse response (.wav)",
@@ -200,12 +280,8 @@ private:
 
         fileChooser->launchAsync (flags, [safe = juce::Component::SafePointer<IrSlot> (this)] (const juce::FileChooser& fc)
         {
-            const auto file = fc.getResult();
-            if (safe == nullptr || ! file.existsAsFile())
-                return;
-
-            safe->processor.loadImpulseResponse (file);
-            safe->showFile (file);
+            if (safe != nullptr)
+                safe->loadFile (fc.getResult());
         });
     }
 
@@ -279,7 +355,11 @@ public:
         namButton.onClick     = [this] { setAmpType (1); };
 
         modelSlot.onModelPicked = [this] { setAmpType (1); };
+        modelSlot.onBrowseToggled = [this] { resized(); refresh(); };
         addChildComponent (modelSlot);
+
+        browser.onPick = [this] (const juce::File& file) { modelSlot.loadFile (file); };
+        addChildComponent (browser);
 
         refresh();
     }
@@ -295,8 +375,21 @@ public:
         namIn.setVisible (namMode);
         modelSlot.setVisible (namMode);
 
+        const bool showBrowser = namMode && modelSlot.isBrowseOpen();
+        if (browser.isVisible() != showBrowser)
+            browser.setVisible (showBrowser);
+
+        if (showBrowser != laidOutWithBrowser)
+            resized();   // the knobs make room for the list
+
         if (namMode)
             modelSlot.refresh();
+
+        if (showBrowser && processor.nam.getFile() != browsedFile)
+        {
+            browsedFile = processor.nam.getFile();
+            browser.setCurrentFile (browsedFile);
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -322,6 +415,15 @@ public:
         modelSlot.setBounds (top);
 
         b.removeFromTop (8);
+
+        // the list of models takes the right side while it is open (NAM mode only)
+        const bool namMode = processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f;
+        laidOutWithBrowser = namMode && modelSlot.isBrowseOpen();
+        if (laidOutWithBrowser)
+        {
+            browser.setBounds (b.removeFromRight (browserWidth));
+            b.removeFromRight (16);
+        }
 
         const int w = b.getWidth();
         auto driveSection  = b.removeFromLeft (w * 30 / 100);
@@ -351,8 +453,13 @@ public:
     // exposed so tests can drive them
     juce::TextButton builtInButton, namButton;
     ModelSlot modelSlot;
+    FileBrowserList browser { true };
 
 private:
+    static constexpr int browserWidth = 300;
+    juce::File browsedFile;
+    bool laidOutWithBrowser = false;
+
     void setAmpType (int type)
     {
         if (auto* param = processor.apvts.getParameter ("AMP_TYPE"))
@@ -459,7 +566,7 @@ class CabPage : public juce::Component
 {
 public:
     explicit CabPage (NeuralFlowAmpAudioProcessor& p)
-        : irSlot (p),
+        : irSlot (p), processor (p),
           lowCut  ("Low cut",  Theme::accent, 0, " Hz"),
           highCut ("High cut", Theme::accent, 1, " kHz")
     {
@@ -481,14 +588,38 @@ public:
         addAndMakeVisible (irSlot);
         addAndMakeVisible (lowCut);
         addAndMakeVisible (highCut);
+
+        irSlot.onBrowseToggled = [this] { resized(); refresh(); };
+        browser.onPick = [this] (const juce::File& file) { irSlot.loadFile (file); };
+        addAndMakeVisible (browser);
     }
 
-    void refresh() { irSlot.refresh(); }
+    void refresh()
+    {
+        irSlot.refresh();
+
+        const bool showBrowser = irSlot.isBrowseOpen();
+        if (browser.isVisible() != showBrowser)
+            browser.setVisible (showBrowser);
+
+        if (showBrowser && processor.loadedIrFile != browsedFile)
+        {
+            browsedFile = processor.loadedIrFile;
+            browser.setCurrentFile (browsedFile);
+        }
+    }
 
     void resized() override
     {
         auto b = getLocalBounds();
         irSlot.setBounds (b.removeFromTop (IrSlot::height));
+        b.removeFromTop (8);
+
+        if (irSlot.isBrowseOpen())
+        {
+            browser.setBounds (b.removeFromRight (300));
+            b.removeFromRight (16);
+        }
 
         const int cellW = 200, cellH = juce::jmin (b.getHeight(), 120 + 28);
         auto row = b.withSizeKeepingCentre (cellW * 2, cellH);
@@ -497,8 +628,11 @@ public:
     }
 
     IrSlot irSlot;
+    FileBrowserList browser { false };
 
 private:
+    NeuralFlowAmpAudioProcessor& processor;
+    juce::File browsedFile;
     LabeledKnob lowCut, highCut;
 };
 
