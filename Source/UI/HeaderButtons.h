@@ -3,6 +3,46 @@
 #include "Theme.h"
 
 //==============================================================================
+/** A page tab in the header ("Rig", "Library"): flat text, the open page is bright with a line under it.
+    Tabs share a radio group, so one is always lit. Adding a page means adding one more TabButton. */
+class TabButton : public juce::Button
+{
+public:
+    TabButton (const juce::String& label, int radioGroup) : juce::Button (label)
+    {
+        setButtonText (label);
+        setClickingTogglesState (true);
+        setRadioGroupId (radioGroup);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    /** Width that fits the label. */
+    int getIdealWidth() const { return (int) Theme::ui (14.0f, true).getStringWidthFloat (getButtonText()) + 28; }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const bool open = getToggleState();
+
+        if (highlighted && ! open)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.05f));
+            g.fillRoundedRectangle (r.reduced (2.0f, 9.0f), 6.0f);
+        }
+
+        g.setColour (open || highlighted ? Theme::textHi : Theme::textMid);
+        g.setFont (Theme::ui (14.0f, true));
+        g.drawText (getButtonText(), r, juce::Justification::centred, false);
+
+        if (open)
+        {
+            g.setColour (Theme::accent);
+            g.fillRoundedRectangle (r.getX() + 14.0f, r.getBottom() - 9.0f, r.getWidth() - 28.0f, 2.0f, 1.0f);
+        }
+    }
+};
+
+//==============================================================================
 /** Gear icon in the header: opens and closes the Settings page. Lit while the page is open. */
 class GearButton : public juce::Button
 {

@@ -59,6 +59,12 @@ public:
     std::function<void (const juce::Array<juce::File>&)> onAdded;
 
     void setPickOnClick (bool on) { pickOnClick = on; }
+
+    /** Name of the primary action in the context menu (empty = no such entry). */
+    void setPrimaryLabel (const juce::String& label) { primaryLabel = label; }
+
+    /** Redraws the lines (a file became loaded or unloaded). */
+    void repaintRows() { list.repaint(); }
     void setEmptyText (const juce::String& text) { emptyText = text; repaint(); }
 
     FileLibrary::Kind getKind() const { return kind; }
@@ -297,7 +303,11 @@ public:
     }
 
 private:
-    void timerCallback() override { refreshIfChanged(); }
+    void timerCallback() override
+    {
+        if (isShowing())
+            refreshIfChanged();
+    }
 
     /** Metadata arrived: lines can change their text and the search may match more. */
     void changeListenerCallback (juce::ChangeBroadcaster*) override

@@ -10,13 +10,16 @@
 #include "SettingsPage.h"
 #include "TunerView.h"
 #include "PedalPicker.h"
+#include "LibraryPage.h"
 #include "../StandaloneHooks.h"
 
 /** The whole UI, laid out in a fixed design space (Theme::designWidth x designHeight).
     The editor scales this component to whatever window size the user picks.
 
-    Rig: a header (name, presets, settings), the chain strip, the page of the block that is selected
-    in the strip, and a footer with the in / out meters and the audio device.
+    Two pages, chosen with the tabs in the header. Rig: the chain strip and the page of the block that is
+    selected in the strip. Library: the files in Documents/tini in four sections. The header (name, tabs,
+    presets, settings) and the footer with the in / out meters and the audio device stay on both. Settings
+    and the tuner open over the page that is showing.
 
     Models (.nam) and impulse responses dropped anywhere on the window are copied into the library
     (Documents/tini) and loaded: a model into the amp (a pedal capture becomes a NAM pedal in the chain),
@@ -28,14 +31,29 @@ class MainView : public juce::Component, public juce::FileDragAndDropTarget, pri
 {
 public:
     explicit MainView (NeuralFlowAmpAudioProcessor& p)
-        : processor (p), presetBar (p), chain (p), blocks (p), footer (p)
+        : processor (p), presetBar (p), chain (p), blocks (p), library (p), footer (p)
     {
         setLookAndFeel (&laf);
 
         addAndMakeVisible (presetBar);
         addAndMakeVisible (chain);
         addAndMakeVisible (blocks);
+        addChildComponent (library);
         addAndMakeVisible (footer);
+
+        rigTab.onClick     = [this] { if (rigTab.getToggleState()) showPage (Page::rig); };
+        libraryTab.onClick = [this] { if (libraryTab.getToggleState()) showPage (Page::library); };
+        rigTab.setToggleState (true, juce::dontSendNotification);
+        addAndMakeVisible (rigTab);
+        addAndMakeVisible (libraryTab);
+
+        library.onLoadToAmp = [this] (const juce::File& file) { loadToAmp (file); };
+        library.onLoadToCab = [this] (const juce::File& file) { loadToCab (file); };
+        library.onAddToChain = [this] (const juce::File& file)
+        {
+            showPage (Page::rig);
+            chain.addNamPedal (file);
+        };
 
         gearButton.onClick = [this] { toggleSettings(); };
         addAndMakeVisible (gearButton);
@@ -59,8 +77,7 @@ public:
             footer.setTunerOpen (blocks.getOverlayKind() == BlockEditor::Overlay::tuner);
             chain.setAddOpen (blocks.getOverlayKind() == BlockEditor::Overlay::addPedal);
 
-            // Settings fills the area between header and footer, so the chain strip steps aside
-            chain.setVisible (! settingsOpen);
+            updatePages();
             resized();
         };
 
@@ -113,6 +130,13 @@ public:
         presetBar.setBounds (juce::Rectangle<int> (PresetBar::width, PresetBar::height)
                                  .withCentre ({ getWidth() / 2, headerH / 2 }));
 
+        // the tabs sit right after the name
+        {
+            auto tabs = juce::Rectangle<int> (margin + 72, 0, getWidth(), headerH);
+            rigTab.setBounds (tabs.removeFromLeft (rigTab.getIdealWidth()));
+            libraryTab.setBounds (tabs.removeFromLeft (libraryTab.getIdealWidth()));
+        }
+
         auto b = getLocalBounds();
         b.removeFromTop (headerH);
 
@@ -124,6 +148,25 @@ public:
         if (blocks.getOverlayKind() == BlockEditor::Overlay::settings)
             blockArea.setTop (chainArea.getY());   // the page also takes the chain strip's place
         blocks.setBounds (blockArea);
+
+        // the Library takes the place of the chain strip and the block page
+        library.setBounds (blockArea.withTop (chainArea.getY()));
+    }
+
+    //==========================================================================
+    enum class Page { rig, library };
+
+    Page getPage() const { return page; }
+
+    /** Opens a page. Anything open over the page (Settings, the tuner, the pedal picker) closes. */
+    void showPage (Page newPage)
+    {
+        page = newPage;
+        rigTab.setToggleState (newPage == Page::rig, juce::dontSendNotification);
+        libraryTab.setToggleState (newPage == Page::library, juce::dontSendNotification);
+        blocks.closeOverlay();   // (updates the pages through onOverlayChanged when something was open)
+        updatePages();
+        resized();
     }
 
     //==========================================================================
@@ -209,6 +252,9 @@ public:
                 first = imported;
         }
 
+        if (model != juce::File() || ir != juce::File() || ! pedals.isEmpty())
+            showPage (Page::rig);   // show what was loaded
+
         for (const auto& pedal : pedals)
             chain.addNamPedal (pedal);
 
@@ -277,6 +323,22 @@ public:
             blocks.showOverlay (std::make_unique<TunerView> (processor), BlockEditor::Overlay::tuner);
     }
 
+    LibraryPage& getLibrary() { return library; }
+    TabButton& getRigTab() { return rigTab; }
+    TabButton& getLibraryTab() { return libraryTab; }
+
+    /** Loads a model into the amp and switches the amp to NAM (the Library page's "Load to amp"). */
+    void loadToAmp (const juce::File& file)
+    {
+        blocks.getAmpPage().modelSlot.loadFile (file);
+    }
+
+    /** Loads an impulse response into the cab. */
+    void loadToCab (const juce::File& file)
+    {
+        blocks.getCabPage().irSlot.loadFile (file);
+    }
+
     GearButton& getGearButton() { return gearButton; }
     WindowButton& getMinimiseButton() { return minimiseButton; }
     WindowButton& getMaximiseButton() { return maximiseButton; }
@@ -306,9 +368,16 @@ private:
     void timerCallback() override
     {
         presetBar.refresh();
-        chain.refresh();
-        blocks.refresh();
         footer.refresh();
+
+        if (library.isVisible())
+            library.refresh();
+
+        if (page == Page::rig || blocks.getOverlayKind() != BlockEditor::Overlay::none)
+        {
+            chain.refresh();
+            blocks.refresh();
+        }
 
         if (maximiseButton.isVisible())
             if (auto& fitted = StandaloneHooks::controller().isMaximised)
@@ -322,7 +391,11 @@ private:
     PresetBar presetBar;
     ChainBar chain;
     BlockEditor blocks;
+    LibraryPage library;
     Footer footer;
+
+    Page page = Page::rig;
+    TabButton rigTab { "Rig", 7000 }, libraryTab { "Library", 7000 };
 
     GearButton gearButton;
     WindowButton minimiseButton { WindowButton::Kind::minimise },
@@ -331,6 +404,20 @@ private:
     juce::ComponentDragger dragger;
     bool dragging = false;
     bool dropHighlight = false;
+
+    /** Which page shows: the Library covers the chain strip and the block page, unless something is open
+        over them (Settings and the tuner use the block area; Settings also takes the chain strip's place). */
+    void updatePages()
+    {
+        const bool overlayOpen = blocks.getOverlayKind() != BlockEditor::Overlay::none
+                              && blocks.getOverlayKind() != BlockEditor::Overlay::addPedal;
+        const bool settingsOpen = blocks.getOverlayKind() == BlockEditor::Overlay::settings;
+        const bool libraryShown = page == Page::library && ! overlayOpen;
+
+        library.setVisible (libraryShown);
+        blocks.setVisible (! libraryShown);
+        chain.setVisible (page == Page::rig && ! settingsOpen);
+    }
 
     void setDropHighlight (bool on)
     {

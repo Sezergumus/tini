@@ -1244,6 +1244,188 @@ void renderUiSnapshots (const juce::File& dir)
             settle();
         }
 
+        // The Library page: tabs in the header, four sections, actions for the selected file
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            FileLibrary::ensureFolders();
+            using Kind = FileLibrary::Kind;
+
+            auto withGear = [&] (const juce::String& gear)
+            {
+                auto text = testModels.getChildFile ("test_wavenet.nam").loadFileAsString();
+                return text.replace ("\"gear_type\": \"amp\"", "\"gear_type\": \"" + gear + "\"");
+            };
+
+            const auto ampsFolder = FileLibrary::libraryFolder (Kind::amps);
+            const auto pedalsFolder = FileLibrary::libraryFolder (Kind::pedals);
+            const auto cabsFolder = FileLibrary::libraryFolder (Kind::cabs);
+            const auto otherFolder = FileLibrary::libraryFolder (Kind::other);
+
+            ampsFolder.getChildFile ("Plexi.nam").replaceWithText (withGear ("amp"));
+            pedalsFolder.getChildFile ("Green Drive.nam").replaceWithText (withGear ("pedal"));
+            pedalsFolder.getChildFile ("Fuzz Face.nam").replaceWithText (withGear ("pedal"));
+            otherFolder.getChildFile ("Rig in a box.nam").replaceWithText (withGear ("amp_cab"));
+
+            {
+                juce::WavAudioFormat wav;
+                const auto ir = cabsFolder.getChildFile ("Cab 4x12.wav");
+                std::unique_ptr<juce::FileOutputStream> out (ir.createOutputStream());
+                if (out != nullptr)
+                {
+                    std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (out.get(), 48000.0, 1, 16, {}, 0));
+                    if (writer != nullptr)
+                    {
+                        out.release();
+                        juce::AudioBuffer<float> spike (1, 2400);
+                        spike.clear();
+                        spike.setSample (0, 0, 0.8f);
+                        writer->writeFromAudioSampleBuffer (spike, 0, spike.getNumSamples());
+                    }
+                }
+            }
+
+            auto& chainBar = view->getChain();
+            auto& libPage = view->getLibrary();
+
+            report (view->getPage() == MainView::Page::rig && ! libPage.isVisible() && chainBar.isVisible(), "the Rig page shows at first");
+
+            view->getLibraryTab().triggerClick();
+            settleLoop (300);
+            report (view->getPage() == MainView::Page::library && libPage.isVisible() && ! chainBar.isVisible() && ! blocks3.isVisible(),
+                    "the Library tab shows the Library in place of the chain and the block page");
+            report (view->getLibraryTab().getToggleState() && ! view->getRigTab().getToggleState(), "...and lights its tab");
+
+            report (libPage.getSectionButton (Kind::amps).getCount() == 1 && libPage.getSectionButton (Kind::pedals).getCount() == 2
+                        && libPage.getSectionButton (Kind::cabs).getCount() == 1 && libPage.getSectionButton (Kind::other).getCount() == 1,
+                    "the sections show how many files they hold");
+
+            auto& list = libPage.getList();
+
+            // (nothing paints in these tests until a snapshot is taken: ask for the details now so they have been read by then)
+            auto readDetails = [&]
+            {
+                for (int i = 0; i < list.getNumFiles(); ++i)
+                    list.detailOf (list.getFile (i));
+                settleLoop (400);
+            };
+            readDetails();
+            report (libPage.getSection() == Kind::amps && list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Plexi.nam",
+                    "the Amps section lists the Amps folder");
+            report (! libPage.getPrimaryButton().isEnabled(), "no file selected: the actions are off");
+
+            // Load to amp
+            list.selectFile (ampsFolder.getChildFile ("Plexi.nam"));
+            settleLoop (100);
+            report (libPage.getPrimaryButton().isEnabled() && libPage.getPrimaryButton().getButtonText() == "Load to amp"
+                        && ! libPage.getSecondaryButton().isVisible(),
+                    "selecting an amp model offers Load to amp");
+            save (*editor, dir.getChildFile ("ui_library_amps.png"));
+
+            libPage.getPrimaryButton().triggerClick();
+            settleLoop (300);
+            waitForModel();
+            report (p.nam.getFile() == ampsFolder.getChildFile ("Plexi.nam") && p.nam.hasModel()
+                        && p.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f,
+                    "Load to amp loads the model and switches the amp to NAM");
+            report (view->getPage() == MainView::Page::library, "...and the Library stays open");
+
+            // Pedals: Add to chain
+            libPage.getSectionButton (Kind::pedals).triggerClick();
+            settleLoop (300);
+            report (libPage.getSection() == Kind::pedals && list.getNumFiles() == 2 && list.getKind() == Kind::pedals,
+                    "the Pedals section lists the Pedals folder");
+
+            readDetails();
+            list.selectFile (pedalsFolder.getChildFile ("Green Drive.nam"));
+            settleLoop (100);
+            report (libPage.getPrimaryButton().getButtonText() == "Add to chain", "selecting a pedal offers Add to chain");
+            save (*editor, dir.getChildFile ("ui_library_pedals.png"));
+
+            libPage.getPrimaryButton().triggerClick();
+            settleLoop (500);
+            report (view->getPage() == MainView::Page::rig && p.apvts.getRawParameterValue ("CAP_ADDED")->load() > 0.5f
+                        && p.pedalNam[0].getFile() == pedalsFolder.getChildFile ("Green Drive.nam"),
+                    "Add to chain puts a NAM pedal named after the model into the chain and shows the Rig");
+            report (blocks3.getShownBlock() == PedalCatalog::makeItem (PedalCatalog::captureType, 0), "...on its page");
+
+            // Cabs: Load to cab
+            view->getLibraryTab().triggerClick();
+            settleLoop (300);
+            libPage.getSectionButton (Kind::cabs).triggerClick();
+            settleLoop (300);
+            report (list.getNumFiles() == 1, "the Cabs section lists the impulse responses");
+            list.selectFile (cabsFolder.getChildFile ("Cab 4x12.wav"));
+            settleLoop (100);
+            report (libPage.getPrimaryButton().getButtonText() == "Load to cab", "selecting an IR offers Load to cab");
+            libPage.getPrimaryButton().triggerClick();
+            settleLoop (400);
+            report (p.loadedIrFile == cabsFolder.getChildFile ("Cab 4x12.wav"), "Load to cab loads the impulse response");
+
+            // Other: both actions
+            libPage.getSectionButton (Kind::other).triggerClick();
+            settleLoop (300);
+            list.selectFile (otherFolder.getChildFile ("Rig in a box.nam"));
+            settleLoop (100);
+            report (libPage.getSecondaryButton().isVisible() && libPage.getSecondaryButton().isEnabled()
+                        && libPage.getPrimaryButton().getButtonText() == "Load to amp",
+                    "Other models offer Load to amp and Add to chain");
+
+            // search
+            libPage.getSectionButton (Kind::pedals).triggerClick();
+            settleLoop (300);
+            libPage.getSearchBox().setText ("fuzz", true);
+            settleLoop (100);
+            report (list.getNumFiles() == 1 && list.getFile (0).getFileName() == "Fuzz Face.nam", "the search field filters the open section");
+            libPage.getSearchBox().setText ("", true);
+            settleLoop (100);
+            report (list.getNumFiles() == 2, "...and clearing it brings the files back");
+
+            // rename follows into the pedal that uses the file; delete and drop work on the list
+            {
+                bool renamedOk = list.renameFile (pedalsFolder.getChildFile ("Green Drive.nam"), "Green Drive MkII").wasOk();
+                settleLoop (500);
+                report (renamedOk && pedalsFolder.getChildFile ("Green Drive MkII.nam").existsAsFile()
+                            && p.pedalNam[0].getFile() == pedalsFolder.getChildFile ("Green Drive MkII.nam"),
+                        "renaming a model that a NAM pedal uses keeps the pedal on it");
+
+                const auto dropped = outside.getChildFile ("Fresh Fuzz.nam");
+                dropped.replaceWithText (withGear ("pedal"));
+                report (list.isInterestedInFileDrag ({ dropped.getFullPathName() }) && ! list.isInterestedInFileDrag ({ cabsFolder.getChildFile ("Cab 4x12.wav").getFullPathName() }),
+                        "the list accepts files of its own kind");
+                list.filesDropped ({ dropped.getFullPathName() }, 0, 0);
+                settleLoop (100);
+                report (list.getNumFiles() == 3 && libPage.getSectionButton (Kind::pedals).getCount() == 3, "a dropped file is added to the section and counted");
+
+                report (list.deleteFile (pedalsFolder.getChildFile ("Fresh Fuzz.nam")) && list.getNumFiles() == 2
+                            && libPage.getSectionButton (Kind::pedals).getCount() == 2,
+                        "deleting a file updates the list and the count");
+            }
+
+            // Settings opens over the Library and gives it back
+            view->getGearButton().triggerClick();
+            settleLoop (300);
+            report (blocks3.getOverlayKind() == BlockEditor::Overlay::settings && ! libPage.isVisible() && blocks3.isVisible(),
+                    "Settings opens over the Library");
+            view->getGearButton().triggerClick();
+            settleLoop (300);
+            report (view->getPage() == MainView::Page::library && libPage.isVisible() && ! blocks3.isVisible(), "...and closing it shows the Library again");
+
+            view->getRigTab().triggerClick();
+            settleLoop (300);
+            report (view->getPage() == MainView::Page::rig && chainBar.isVisible() && blocks3.isVisible() && ! libPage.isVisible(),
+                    "the Rig tab brings the chain back");
+
+            p.unloadNamModel();
+            setParam (p, "AMP_TYPE", 0.0f);
+            for (int copy = 0; copy < PedalCatalog::namCopies; ++copy)
+            {
+                setParam (p, PedalCatalog::addedId (PedalCatalog::makeItem (PedalCatalog::captureType, copy)), 0.0f);
+                p.unloadPedalModel (copy);
+            }
+            view->getChain().select (PedalCatalog::ampItem);
+            settle();
+        }
+
         FileLibrary::rootOverride().deleteRecursively();
         outside.deleteRecursively();
     }
