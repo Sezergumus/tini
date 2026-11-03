@@ -71,7 +71,7 @@ juce_add_plugin(NeuralFlowAmp
     ICON_BIG   "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Branding/icon-512.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Branding/icon-64.png"
     IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
@@ -90,6 +90,16 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/LatencyProbe.h
     Source/PresetManager.h
     Source/DSP/StereoDelay.h
+    Source/DSP/DefaultCab.h
+    Source/DSP/NamEngine.h
+    Source/LibraryPaths.h
+    Source/NamMetadata.h
+    Source/UI/Dialog.h
+    Source/UI/FilterBar.h
+    Source/UI/LibraryFilter.h
+    Source/UI/LibraryPage.h
+    Source/UI/ModelList.h
+    Source/UI/PedalPicker.h
     Source/UI/Theme.h
     Source/UI/NeuralLookAndFeel.h
     Source/UI/Widgets.h

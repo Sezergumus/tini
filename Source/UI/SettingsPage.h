@@ -85,6 +85,8 @@ public:
                     juce::Justification::centredLeft, false);
         g.drawText ("Typeface: Inter (SIL Open Font License 1.1)", aboutLines[1], juce::Justification::centredLeft, false);
         g.drawText ("Neural Amp Modeler core (MIT License)", aboutLines[2], juce::Justification::centredLeft, false);
+        g.drawText ("Eigen (Mozilla Public License 2.0)", aboutLines[3], juce::Justification::centredLeft, false);
+        g.drawText ("Free software, AGPL-3.0: github.com/Sezergumus/tini", aboutLines[4], juce::Justification::centredLeft, false);
 
         g.setColour (Theme::divider);
         g.fillRect (dividerX, audioHeading.getY(), 1, getHeight() - audioHeading.getY());
@@ -133,7 +135,7 @@ private:
     juce::TextButton doneButton;
 
     juce::Rectangle<int> titleArea, audioHeading, audioNote, tunerHeading, referenceLabel, aboutHeading;
-    std::array<juce::Rectangle<int>, 3> aboutLines;
+    std::array<juce::Rectangle<int>, 5> aboutLines;
     int dividerX = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPage)
