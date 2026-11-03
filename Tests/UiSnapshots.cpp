@@ -146,19 +146,15 @@ void renderUiSnapshots (const juce::File& dir)
         setParam (p, juce::String (id) + "_ADDED", 0.0f);
     settle();
 
-    auto* addButton = dynamic_cast<juce::TextButton*> (findIf (*editor, [] (juce::Component& c)
-    {
-        auto* b = dynamic_cast<juce::TextButton*> (&c);
-        return b != nullptr && b->getButtonText().contains ("ADD PEDAL");
-    }));
-    report (addButton != nullptr, "the chain panel has an ADD PEDAL button");
+    auto* addButton = findFirst<AddButton> (*editor);
+    report (addButton != nullptr, "the chain bar has a + button");
 
     if (addButton != nullptr)
     {
         addButton->triggerClick();
         settleLoop (300);
         save (*editor, dir.getChildFile ("ui_add_menu.png"));
-        report (findFirst<AddPedalMenu> (*editor) != nullptr, "ADD PEDAL opens the popover");
+        report (findFirst<AddPedalMenu> (*editor) != nullptr, "the + button opens the popover");
 
         if (auto* box = findFirst<juce::CallOutBox> (*editor))
             box->dismiss();
@@ -200,7 +196,7 @@ void renderUiSnapshots (const juce::File& dir)
         report (p.apvts.getRawParameterValue ("GATE_ADDED_2")->load() > 0.5f, "picking GATE twice adds a second gate");
 
         int gateViews = 0;
-        if (auto* panel = findFirst<SignalChainPanel> (*editor))
+        if (auto* panel = findFirst<ChainBar> (*editor))
             for (auto* v : panel->getStrip().pedals)
                 gateViews += PedalCatalog::typeOf (v->getItem()) == 0 ? 1 : 0;
         report (gateViews == 2, "both gates are shown in the chain");
@@ -218,18 +214,18 @@ void renderUiSnapshots (const juce::File& dir)
     settle();
     settleLoop (300);
 
-    if (auto* panel = findFirst<SignalChainPanel> (*editor))
+    if (auto* panel = findFirst<ChainBar> (*editor))
     {
         auto& strip = panel->getStrip();
 
-        auto pedalOf = [&] (int id) -> PedalView*
+        auto pedalOf = [&] (int id) -> BlockTile*
         {
             for (auto* v : strip.pedals)
                 if (v->getItem() == id)
                     return v;
             return nullptr;
         };
-        auto* ampNode = findFirst<AmpNode> (*editor);
+        auto* ampNode = &strip.getAmpTile();
 
         constexpr int gate = 0, comp = 1, boost = 2, od = 3, chorus = 4, delay = 5, reverb = 6, amp = PedalCatalog::ampItem;
         auto order = [&] { return p.getChainOrder(); };
@@ -310,23 +306,132 @@ void renderUiSnapshots (const juce::File& dir)
     }
 
     //==========================================================================
-    // NAM amp slot: type switch and model card.
-    if (auto* lead = findFirst<LeadChannelPanel> (*editor))
+    // Blocks: clicking a tile opens its page.
+    auto* chainBar = findFirst<ChainBar> (*editor);
+    auto* blocks = findFirst<BlockEditor> (*editor);
+    report (chainBar != nullptr && blocks != nullptr, "the editor has a chain bar and a block editor");
+
+    if (chainBar != nullptr && blocks != nullptr)
     {
+        // a click is a mouse down and up on the tile without moving
+        auto click = [&] (juce::Component& tile)
+        {
+            const auto source = juce::Desktop::getInstance().getMainMouseSource();
+            const auto now = juce::Time::getCurrentTime();
+            const juce::Point<float> pos (6.0f, 6.0f);
+            juce::MouseEvent down (source, pos, juce::ModifierKeys(), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &tile, &tile, now, pos, now, 1, false);
+            auto& strip = chainBar->getStrip();
+            if (&tile == &chainBar->getCabTile())
+            {
+                tile.mouseUp (down);
+            }
+            else
+            {
+                strip.mouseDown (down.getEventRelativeTo (&strip));
+                strip.mouseUp (down.getEventRelativeTo (&strip));
+            }
+            settleLoop (50);
+        };
+
+        for (auto id : { "GATE", "BOOST", "CHORUS", "DELAY", "REVERB" })
+            setParam (p, juce::String (id) + "_ADDED", 1.0f);
+        setParam (p, "GATE_ADDED_2", 0.0f);
+        p.setChainOrder (PedalCatalog::defaultOrder());
+        settle();
+        settleLoop (300);
+
+        report (blocks->getShownBlock() == PedalCatalog::ampItem && chainBar->getSelected() == PedalCatalog::ampItem,
+                "the amp page is open at first");
+        save (*editor, dir.getChildFile ("ui_page_amp.png"));
+
+        BlockTile* delayTile = nullptr;
+        BlockTile* gateTile = nullptr;
+        for (auto* t : chainBar->getStrip().pedals)
+        {
+            if (t->getItem() == 5) delayTile = t;
+            if (t->getItem() == 0) gateTile = t;
+        }
+
+        if (delayTile != nullptr)
+        {
+            click (*delayTile);
+            report (blocks->getShownBlock() == 5 && blocks->getPedalPage() != nullptr && chainBar->getSelected() == 5,
+                    "clicking a pedal tile opens that pedal's page");
+            report (! blocks->getAmpPage().isVisible(), "...and hides the amp page");
+            save (*editor, dir.getChildFile ("ui_page_pedal_delay.png"));
+        }
+        else
+            report (false, "the delay pedal has a tile");
+
+        click (chainBar->getCabTile());
+        report (blocks->getShownBlock() == cabBlock && blocks->getCabPage().isVisible() && blocks->getPedalPage() == nullptr,
+                "clicking the cab tile opens the cab page");
+        save (*editor, dir.getChildFile ("ui_page_cab.png"));
+
+        auto order = chainBar->getStrip().getItemOrder();
+        report (std::find (order.begin(), order.end(), cabBlock) == order.end(), "the cab is not a draggable item of the chain");
+
+        // the open pedal is removed: back to the amp
+        if (delayTile != nullptr)
+            click (*delayTile);
+        report (blocks->getShownBlock() == 5, "the delay page is open again");
+        setParam (p, "DELAY_ADDED", 0.0f);
+        settle();
+        settleLoop (300);
+        report (blocks->getShownBlock() == PedalCatalog::ampItem && chainBar->getSelected() == PedalCatalog::ampItem,
+                "removing the open pedal falls back to the amp page");
+
+        // a pedal's bypass switch is bound to its parameter
+        if (gateTile != nullptr)
+        {
+            click (*gateTile);
+            if (auto* page = blocks->getPedalPage())
+            {
+                const bool before = p.apvts.getRawParameterValue ("GATE_ON")->load() > 0.5f;
+                page->getBypass().triggerClick();
+                settleLoop (50);
+                report ((p.apvts.getRawParameterValue ("GATE_ON")->load() > 0.5f) != before, "the bypass switch on a pedal page toggles the pedal");
+                page->getBypass().triggerClick();
+                settleLoop (50);
+            }
+            else
+            {
+                report (false, "the gate has a page");
+            }
+        }
+
+        click (chainBar->getStrip().getAmpTile());
+        report (blocks->getShownBlock() == PedalCatalog::ampItem, "clicking the amp tile opens the amp page");
+
+        for (auto id : { "GATE", "BOOST", "CHORUS", "DELAY", "REVERB" })
+            setParam (p, juce::String (id) + "_ADDED", 0.0f);
+        settle();
+    }
+
+    //==========================================================================
+    // NAM amp slot: type switch and model slot.
+    if (blocks != nullptr)
+    {
+        auto& amp = blocks->getAmpPage();
         const auto model = juce::File (__FILE__).getParentDirectory().getChildFile ("models").getChildFile ("test_wavenet.nam");
         auto ampType = [&] { return p.apvts.getRawParameterValue ("AMP_TYPE")->load(); };
 
+        blocks->show (PedalCatalog::ampItem);
         p.unloadNamModel();
         setParam (p, "AMP_TYPE", 0.0f);
         settle();
 
-        report (lead->builtInButton.getToggleState() && ! lead->namButton.getToggleState(), "the built-in amp is selected at first");
+        report (amp.builtInButton.getToggleState() && ! amp.namButton.getToggleState(), "the built-in amp is selected at first");
+        report (amp.getDriveKnob().isVisible() && ! amp.getInputKnob().isVisible() && ! amp.modelSlot.isVisible(),
+                "built-in mode shows Drive and no model slot");
         save (*editor, dir.getChildFile ("ui_amp_builtin.png"));
 
-        lead->namButton.triggerClick();
+        amp.namButton.triggerClick();
         settleLoop (100);
-        report (ampType() > 0.5f && lead->namButton.getToggleState() && ! lead->builtInButton.getToggleState(),
+        report (ampType() > 0.5f && amp.namButton.getToggleState() && ! amp.builtInButton.getToggleState(),
                 "the NAM button switches the amp to NAM");
+        report (! amp.getDriveKnob().isVisible() && amp.getInputKnob().isVisible() && amp.modelSlot.isVisible(),
+                "NAM mode shows Input instead of Drive, and the model slot");
         save (*editor, dir.getChildFile ("ui_amp_nam_empty.png"));
 
         p.loadNamModel (model);
@@ -337,19 +442,17 @@ void renderUiSnapshots (const juce::File& dir)
         save (*editor, dir.getChildFile ("ui_amp_nam_loaded.png"));
 
         const float levelBefore = p.apvts.getRawParameterValue ("NAM_NORM")->load();
-        lead->levelButton.triggerClick();
+        amp.modelSlot.levelButton.triggerClick();
         settleLoop (50);
         report ((p.apvts.getRawParameterValue ("NAM_NORM")->load() > 0.5f) != (levelBefore > 0.5f),
-                "LEVEL MATCH toggles the normalisation (" + juce::String (levelBefore) + " -> "
-                    + juce::String (p.apvts.getRawParameterValue ("NAM_NORM")->load())
-                    + ", button on: " + juce::String ((int) lead->levelButton.getToggleState())
-                    + ", clicks toggle: " + juce::String ((int) lead->levelButton.getClickingTogglesState()) + ")");
-        lead->levelButton.triggerClick();
+                "Level match toggles the normalisation (" + juce::String (levelBefore) + " -> "
+                    + juce::String (p.apvts.getRawParameterValue ("NAM_NORM")->load()) + ")");
+        amp.modelSlot.levelButton.triggerClick();
         settleLoop (50);
 
-        lead->clearButton.triggerClick();
+        amp.modelSlot.clearButton.triggerClick();
         settle();
-        report (p.nam.getStatus().state == NamEngine::Status::State::empty && ! p.nam.hasModel(), "CLEAR removes the model");
+        report (p.nam.getStatus().state == NamEngine::Status::State::empty && ! p.nam.hasModel(), "Clear removes the model");
 
         auto bad = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ui_broken.nam");
         bad.replaceWithText ("not a model");
@@ -362,12 +465,14 @@ void renderUiSnapshots (const juce::File& dir)
         bad.deleteFile();
 
         p.unloadNamModel();
-        lead->builtInButton.triggerClick();
+        amp.builtInButton.triggerClick();
         settle();
-        report (ampType() < 0.5f && lead->builtInButton.getToggleState(), "the BUILT-IN button switches back");
+        report (ampType() < 0.5f && amp.builtInButton.getToggleState(), "the Built-in button switches back");
     }
     else
-        report (false, "the lead channel panel exists");
+    {
+        report (false, "the block editor exists");
+    }
 
     //==========================================================================
     // Presets: header bar, stepping, edited marker, save dialog.
@@ -382,7 +487,7 @@ void renderUiSnapshots (const juce::File& dir)
         auto pedalCount = [&]
         {
             int n = 0;
-            if (auto* panel = findFirst<SignalChainPanel> (*editor))
+            if (auto* panel = findFirst<ChainBar> (*editor))
                 n = panel->getStrip().pedals.size();
             return n;
         };

@@ -4,26 +4,28 @@
 #include "../LatencyProbe.h"
 #include "NeuralLookAndFeel.h"
 #include "Panels.h"
+#include "BlockPages.h"
 #include "PresetBar.h"
 
 /** The whole UI, laid out in a fixed design space (Theme::designWidth x designHeight).
-    The editor scales this component to whatever window size the user picks. */
+    The editor scales this component to whatever window size the user picks.
+
+    Rig: a header (name, presets, audio device), the chain strip with the in / out meters, and the
+    page of the block that is selected in the strip. */
 class MainView : public juce::Component, private juce::Timer
 {
 public:
     explicit MainView (NeuralFlowAmpAudioProcessor& p)
-        : processor (p),
-          inputMeter ("INPUT"), outputMeter ("OUTPUT"),
-          presetBar (p), lead (p), chain (p), cabPanel (p)
+        : processor (p), presetBar (p), chain (p), blocks (p)
     {
         setLookAndFeel (&laf);
 
-        addAndMakeVisible (inputMeter);
-        addAndMakeVisible (outputMeter);
         addAndMakeVisible (presetBar);
-        addAndMakeVisible (lead);
         addAndMakeVisible (chain);
-        addAndMakeVisible (cabPanel);
+        addAndMakeVisible (blocks);
+
+        chain.onSelect = [this] (int block) { blocks.show (block); };
+        blocks.show (chain.getSelected());
 
         updateAudioInfo();
         startTimerHz (60);
@@ -37,13 +39,8 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds().toFloat();
-
-        g.setGradientFill (juce::ColourGradient (Theme::bgTop, 0.0f, 0.0f, Theme::bgBottom, 0.0f, r.getBottom(), false));
-        g.fillAll();
-
-        paintHeader (g, r.removeFromTop ((float) headerH));
-        paintFooter (g, r.removeFromBottom ((float) footerH));
+        g.fillAll (Theme::bg);
+        paintHeader (g, getLocalBounds().toFloat().removeFromTop ((float) headerH));
     }
 
     void resized() override
@@ -53,88 +50,41 @@ public:
 
         auto b = getLocalBounds();
         b.removeFromTop (headerH);
-        b.removeFromBottom (footerH);
 
-        auto meters = b.reduced (12, 6);
-        inputMeter.setBounds  (meters.removeFromLeft (40));
-        outputMeter.setBounds (meters.removeFromRight (40));
-
-        auto content = b.withTrimmedLeft (64).withTrimmedRight (64).withTrimmedTop (6).withTrimmedBottom (8);
-
-        lead.setBounds (content.removeFromTop (262));
-        content.removeFromTop (16);
-
-        const int chainW = juce::roundToInt ((float) (content.getWidth() - 16) * 0.58f);
-        chain.setBounds (content.removeFromLeft (chainW));
-        content.removeFromLeft (16);
-        cabPanel.setBounds (content);
+        chain.setBounds (b.removeFromTop (chainH).reduced (margin, 0));
+        blocks.setBounds (b.reduced (margin, 0).withTrimmedBottom (margin).withTrimmedTop (4));
     }
 
+    ChainBar& getChain() { return chain; }
+    BlockEditor& getBlocks() { return blocks; }
+
 private:
-    static constexpr int headerH = 58;
-    static constexpr int footerH = 38;
+    static constexpr int headerH = 56;
+    static constexpr int chainH  = 132;
+    static constexpr int margin  = 24;
 
     //==========================================================================
     void paintHeader (juce::Graphics& g, juce::Rectangle<float> r)
     {
-        g.setColour (Theme::divider);
-        g.fillRect (r.getX(), r.getBottom() - 1.0f, r.getWidth(), 1.0f);
-
         // product name (text only, no logo mark)
-        g.setFont (Theme::ui (24.0f, true));
+        g.setFont (Theme::ui (22.0f, true));
         g.setColour (Theme::textHi);
         g.drawText (juce::String (juce::CharPointer_UTF8 ("t\xc4\xb1n\xc4\xb1")),   // "tını"
-                    juce::Rectangle<float> (26.0f, r.getY(), 200.0f, r.getHeight()), juce::Justification::centredLeft, false);
+                    juce::Rectangle<float> ((float) margin + 2.0f, r.getY(), 200.0f, r.getHeight()), juce::Justification::centredLeft, false);
 
-        // audio engine chip
-        const auto chipFont = Theme::mono (11.0f);
-        const float cw = chipFont.getStringWidthFloat (audioInfo) + 36.0f;
-        auto chip = juce::Rectangle<float> (cw, 28.0f).withCentre ({ r.getRight() - 26.0f - cw * 0.5f, r.getCentreY() });
-        g.setColour (juce::Colours::white.withAlpha (0.03f));
-        g.fillRoundedRectangle (chip, 6.0f);
-        g.setColour (Theme::panelBorder);
-        g.drawRoundedRectangle (chip.reduced (0.5f), 6.0f, 1.0f);
-
-        g.setColour (Theme::accent);
-        g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre ({ chip.getX() + 14.0f, chip.getCentreY() }));
-        g.setColour (Theme::textMid);
-        g.setFont (chipFont);
-        g.drawText (audioInfo, chip.withTrimmedLeft (26.0f), juce::Justification::centredLeft, false);
-    }
-
-    void paintFooter (juce::Graphics& g, juce::Rectangle<float> r)
-    {
-        g.setColour (Theme::divider);
-        g.fillRect (r.getX(), r.getY(), r.getWidth(), 1.0f);
-
-        r = r.reduced (26.0f, 0.0f);
+        // audio device, plain text
         g.setColour (Theme::textLo);
-        g.setFont (Theme::ui (10.0f, true, 0.18f));
-        g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc2\xa9 2026 TINI")), r, juce::Justification::centredLeft, false);
-        g.drawText ("v" + juce::String (JucePlugin_VersionString), r, juce::Justification::centredRight, false);
+        g.setFont (Theme::ui (12.0f));
+        g.drawText (audioInfo, r.withTrimmedRight ((float) margin).withTrimmedLeft (r.getWidth() * 0.62f),
+                    juce::Justification::centredRight, true);
     }
 
     //==========================================================================
     void timerCallback() override
     {
-        // oscilloscope
-        if (processor.isNextFrameReady.load())
-        {
-            processor.isNextFrameReady.store (false);
-            scopeCopy = processor.scopeData;
-            lead.scope.setData (scopeCopy.data(), (int) scopeCopy.size());
-        }
-
-        // meters
-        const float inDb  = juce::Decibels::gainToDecibels (processor.inputPeak.exchange (0.0f),  -60.0f);
-        const float outDb = juce::Decibels::gainToDecibels (processor.outputPeak.exchange (0.0f), -60.0f);
-        inputMeter.pushLevel (inDb);
-        outputMeter.pushLevel (outDb);
-        cabPanel.setLevel (Theme::dbToUnit (outDb, -48.0f));
-
         presetBar.refresh();
-        lead.refresh();
         chain.refresh();
+        blocks.refresh();
 
         if (++frame % 30 == 0)
             updateAudioInfo();
@@ -145,21 +95,24 @@ private:
         const double sr = processor.getSampleRate();
         const int block = processor.getBlockSize();
 
-        // The old readout was just one buffer (block / sampleRate), which is far below what you
-        // actually hear. In the standalone we can ask the device for its real in + out latency;
-        // inside a DAW only the buffer size is known, so no millisecond figure is shown.
+        // In the standalone we can ask the device for its real in + out latency; inside a DAW only
+        // the buffer size is known, so no millisecond figure is shown.
         const auto device = LatencyProbe::query();
         const double roundTrip = LatencyProbe::roundTripMs (device, processor.getLatencySamples());
 
-        juce::String text = "AUDIO  " + juce::String (sr / 1000.0, 1) + " kHz";
-        if (block > 0 && sr > 0.0)
-            text << "  |  " << block << " smp";
-
+        juce::StringArray parts;
         if (device.valid && device.driverName.isNotEmpty())
-            text << "  |  " << device.driverName;
+            parts.add (device.driverName);
+
+        parts.add (juce::String (sr / 1000.0, 1) + " kHz");
+
+        if (block > 0 && sr > 0.0)
+            parts.add (juce::String (block) + " smp");
 
         if (roundTrip >= 0.0)
-            text << "  |  " << juce::String::charToString (0x2248) << " " << juce::String (roundTrip, 1) << " ms";
+            parts.add (juce::String::charToString (0x2248) + " " + juce::String (roundTrip, 1) + " ms");
+
+        const auto text = parts.joinIntoString (juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")));
 
         if (text != audioInfo)
         {
@@ -172,13 +125,10 @@ private:
     NeuralFlowAmpAudioProcessor& processor;
     NeuralLookAndFeel laf;
 
-    LevelMeter inputMeter, outputMeter;
     PresetBar presetBar;
-    LeadChannelPanel lead;
-    SignalChainPanel chain;
-    CabPanel cabPanel;
+    ChainBar chain;
+    BlockEditor blocks;
 
-    std::array<float, NeuralFlowAmpAudioProcessor::scopeSize> scopeCopy {};
     juce::String audioInfo;
     int frame = 0;
 

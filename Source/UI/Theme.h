@@ -9,8 +9,8 @@
 namespace Theme
 {
     // Design-space size of the whole UI. The editor scales this to the real window size.
-    constexpr int designWidth  = 1280;
-    constexpr int designHeight = 880;
+    constexpr int designWidth  = 1120;
+    constexpr int designHeight = 700;
 
     // 8 px grid
     constexpr int unit = 8;
@@ -71,6 +71,19 @@ namespace Theme
 
     /** Numbers use Inter as well; kept as a name so call sites say what they show. */
     inline juce::Font mono (float size, bool bold = false) { return ui (size, bold); }
+
+    /** "NOISE GATE 2" -> "Noise Gate 2". The catalog keeps its names in capitals; the UI shows Title Case. */
+    inline juce::String titleCase (const juce::String& text)
+    {
+        juce::String out;
+        bool wordStart = true;
+        for (auto c : text)
+        {
+            out += wordStart ? juce::CharacterFunctions::toUpperCase (c) : juce::CharacterFunctions::toLowerCase (c);
+            wordStart = (c == ' ' || c == '-' || c == '/');
+        }
+        return out;
+    }
 
     //==========================================================================
     inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> r, float radius = 12.0f)
