@@ -798,7 +798,7 @@ private:
 class BlockEditor : public juce::Component
 {
 public:
-    enum class Overlay { none, settings, tuner };
+    enum class Overlay { none, settings, tuner, addPedal };
 
     explicit BlockEditor (NeuralFlowAmpAudioProcessor& p)
         : processor (p), ampPage (p), cabPage (p)

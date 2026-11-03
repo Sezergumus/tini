@@ -653,7 +653,7 @@ private:
 };
 
 //==============================================================================
-/** Round "+" at the end of the chain strip: opens the add-pedal popover. */
+/** Round "+" at the end of the chain strip: opens the pedal picker (lit while it is open). */
 class AddButton : public juce::Button
 {
 public:
@@ -670,17 +670,19 @@ public:
         auto r = getLocalBounds().toFloat().withSizeKeepingCentre ((float) size, (float) size);
         const bool usable = isEnabled();
 
-        g.setColour (down ? Theme::surfaceHi.brighter (0.1f) : highlighted && usable ? Theme::surfaceHi : Theme::surface);
+        const bool open = getToggleState();
+
+        g.setColour (down ? Theme::surfaceHi.brighter (0.1f) : (highlighted && usable) || open ? Theme::surfaceHi : Theme::surface);
         g.fillEllipse (r);
 
-        g.setColour (! usable ? Theme::textLo.withAlpha (0.5f) : highlighted ? Theme::accent : Theme::textMid);
+        g.setColour (! usable ? Theme::textLo.withAlpha (0.5f) : highlighted || open ? Theme::accent : Theme::textMid);
         g.fillRoundedRectangle (r.withSizeKeepingCentre (14.0f, 2.0f), 1.0f);
         g.fillRoundedRectangle (r.withSizeKeepingCentre (2.0f, 14.0f), 1.0f);
     }
 };
 
 //==============================================================================
-/** One selectable line in the add-pedal popover. */
+/** One card of the pedal picker: a built-in pedal that can be added. */
 class PedalRow : public juce::Button
 {
 public:
@@ -752,86 +754,6 @@ private:
     juce::String knobNames;
 };
 
-/** Contents of the call-out that opens from the "+" button: one row per pedal that can be added. */
-class AddPedalMenu : public juce::Component
-{
-public:
-    static constexpr int width = 320;
-
-    /** Called with the pedal type the user picked. */
-    std::function<void (int)> onPick;
-
-    explicit AddPedalMenu (juce::AudioProcessorValueTreeState& apvts)
-    {
-        for (int type = 0; type < PedalCatalog::count; ++type)
-        {
-            const int used = ChainStrip::copiesInChain (apvts, type);
-            available += PedalCatalog::copiesOfType (type) - used;
-
-            auto* row = rows.add (new PedalRow (type, used));
-            row->onClick = [this, row]
-            {
-                if (onPick)
-                    onPick (row->getType());
-
-                if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
-                    box->dismiss();
-            };
-            addAndMakeVisible (row);
-        }
-
-        setSize (width, padding + headerHeight + rows.size() * (PedalRow::height + rowGap) + footerHeight);
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto r = getLocalBounds().toFloat().reduced ((float) padding + 4.0f, 0.0f);
-        auto header = r.withTrimmedTop ((float) padding).removeFromTop ((float) headerHeight);
-
-        g.setColour (Theme::textHi);
-        g.setFont (Theme::ui (14.0f, true));
-        g.drawText ("Add pedal", header.withTrimmedBottom (4.0f), juce::Justification::centredLeft, false);
-
-        g.setColour (Theme::textLo);
-        g.setFont (Theme::ui (11.0f));
-        g.drawText (available > 0 ? juce::String (available) + " available" : juce::String ("All in use"),
-                    header.withTrimmedBottom (4.0f), juce::Justification::centredRight, false);
-
-        auto footer = getLocalBounds().toFloat().removeFromBottom ((float) footerHeight).reduced ((float) padding + 4.0f, 0.0f);
-        g.setColour (Theme::textLo);
-        g.setFont (Theme::ui (11.0f));
-        g.drawText ("Drag blocks in the chain to reorder them", footer.withTrimmedBottom (4.0f),
-                    juce::Justification::centredLeft, false);
-    }
-
-    void resized() override
-    {
-        auto b = getLocalBounds().reduced (padding, 0);
-        b.removeFromTop (padding + headerHeight);
-
-        for (auto* row : rows)
-        {
-            row->setBounds (b.removeFromTop (PedalRow::height));
-            b.removeFromTop (rowGap);
-        }
-    }
-
-    /** Row of a pedal type, found by its "<NAME>_ADDED" id (e.g. "DELAY_ADDED"). */
-    PedalRow* findRow (const juce::String& addedID) const
-    {
-        for (auto* row : rows)
-            if (addedID == PedalCatalog::addedBaseId (row->getType()))
-                return row;
-        return nullptr;
-    }
-
-private:
-    static constexpr int padding = 10, headerHeight = 34, footerHeight = 28, rowGap = 2;
-
-    juce::OwnedArray<PedalRow> rows;
-    int available = 0;
-};
-
 //==============================================================================
 /** The top of the Rig: the chain of pedals and the amp, the "+" button and the fixed cab block.
     Clicking a block selects it (onSelect), the page below shows it. */
@@ -851,7 +773,7 @@ public:
 
         strip.onOrderChanged = [this] (const std::vector<int>& visible) { applyVisibleOrder (visible); };
         strip.onItemClicked  = [this] (int block) { select (block); };
-        addButton.onClick    = [this] { showAddMenu(); };
+        addButton.onClick    = [this] { if (onAddRequested) onAddRequested(); };
         cabTile.onClick      = [this] { select (cabBlock); };
 
         rebuild();
@@ -860,6 +782,12 @@ public:
 
     /** Called when the selected block changes. */
     std::function<void (int)> onSelect;
+
+    /** Called when the "+" button was clicked: the owner shows or hides the pedal picker. */
+    std::function<void()> onAddRequested;
+
+    /** Lights the "+" button while the picker is open. */
+    void setAddOpen (bool open) { addButton.setToggleState (open, juce::dontSendNotification); }
 
     int getSelected() const { return selected; }
 
@@ -914,24 +842,29 @@ public:
     BlockTile& getCabTile() { return cabTile; }
     AddButton& getAddButton() { return addButton; }
 
-    /** Opens the add-pedal popover below the "+" button. */
-    void showAddMenu()
+    /** Puts the first unused copy of a built-in pedal type into the chain and opens its page. */
+    void addPedal (int type)
     {
-        auto* parent = getParentComponent();
-        if (parent == nullptr || ! addButton.isEnabled())
+        const int item = ChainStrip::firstFreeCopy (apvts, type);
+        if (item < 0)
             return;
 
-        auto menu = std::make_unique<AddPedalMenu> (apvts);
-        menu->onPick = [safe = juce::Component::SafePointer<ChainBar> (this)] (int type)
-        {
-            if (safe != nullptr)
-                safe->addPedal (type);
-        };
+        setAdded (item, true);
+        showNewItem (item);
+    }
 
-        auto& box = juce::CallOutBox::launchAsynchronously (std::move (menu),
-                                                            parent->getLocalArea (&addButton, addButton.getLocalBounds()),
-                                                            parent);
-        box.setArrowSize (10.0f);
+    /** Puts a NAM pedal with `model` into the chain and opens its page. Returns false if every NAM pedal
+        slot is already in the chain or the file is missing. */
+    bool addNamPedal (const juce::File& model)
+    {
+        const int item = ChainStrip::firstFreeCopy (apvts, PedalCatalog::captureType);
+        if (item < 0 || ! model.existsAsFile())
+            return false;
+
+        processor.loadPedalModel (PedalCatalog::copyOf (item), model);
+        setAdded (item, true);
+        showNewItem (item);
+        return true;
     }
 
 private:
@@ -1048,14 +981,8 @@ private:
         }
     }
 
-    /** Puts the first unused copy of a pedal type into the chain and opens its page. */
-    void addPedal (int type)
+    void showNewItem (int item)
     {
-        const int item = ChainStrip::firstFreeCopy (apvts, type);
-        if (item < 0)
-            return;
-
-        setAdded (item, true);
         rebuild();
         select (item);
 

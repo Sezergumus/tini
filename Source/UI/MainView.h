@@ -9,6 +9,7 @@
 #include "HeaderButtons.h"
 #include "SettingsPage.h"
 #include "TunerView.h"
+#include "PedalPicker.h"
 #include "../StandaloneHooks.h"
 
 /** The whole UI, laid out in a fixed design space (Theme::designWidth x designHeight).
@@ -18,7 +19,8 @@
     in the strip, and a footer with the in / out meters and the audio device.
 
     Models (.nam) and impulse responses dropped anywhere on the window are copied into the library
-    (Documents/tini) and loaded: a model into the amp, an impulse response into the cab.
+    (Documents/tini) and loaded: a model into the amp (a pedal capture becomes a NAM pedal in the chain),
+    an impulse response into the cab.
 
     In the standalone the header is also the title bar: dragging it moves the window, a double click
     fits it to the screen, and minimise / fit / close buttons sit at its right end (StandaloneHooks). */
@@ -55,6 +57,7 @@ public:
 
             gearButton.setToggleState (settingsOpen, juce::dontSendNotification);
             footer.setTunerOpen (blocks.getOverlayKind() == BlockEditor::Overlay::tuner);
+            chain.setAddOpen (blocks.getOverlayKind() == BlockEditor::Overlay::addPedal);
 
             // Settings fills the area between header and footer, so the chain strip steps aside
             chain.setVisible (! settingsOpen);
@@ -62,6 +65,7 @@ public:
         };
 
         chain.onSelect = [this] (int block) { blocks.show (block); };
+        chain.onAddRequested = [this] { togglePedalPicker(); };
         blocks.show (chain.getSelected());
 
         startTimerHz (60);
@@ -182,6 +186,7 @@ public:
     void importAndLoad (const juce::Array<juce::File>& files)
     {
         juce::File model, ir;
+        juce::Array<juce::File> pedals;
 
         for (const auto& file : files)
         {
@@ -194,12 +199,18 @@ public:
                 imported = file;   // the library could not be written: use the file where it is
 
             if (kind == FileLibrary::Kind::pedals)
-                continue;   // a pedal capture is kept in the library; it joins the chain from the pedal picker
+            {
+                pedals.add (imported.existsAsFile() ? imported : file);   // a pedal capture joins the chain as a NAM pedal
+                continue;
+            }
 
             auto& first = kind == FileLibrary::Kind::cabs ? ir : model;
             if (first == juce::File())
                 first = imported;
         }
+
+        for (const auto& pedal : pedals)
+            chain.addNamPedal (pedal);
 
         if (model != juce::File())
         {
@@ -232,6 +243,29 @@ public:
             };
             blocks.showOverlay (std::move (page), BlockEditor::Overlay::settings);
         }
+    }
+
+    /** Opens the pedal picker in place of the block page (the "+" button), or closes it again. */
+    void togglePedalPicker()
+    {
+        if (blocks.getOverlayKind() == BlockEditor::Overlay::addPedal)
+        {
+            blocks.closeOverlay();
+            return;
+        }
+
+        auto picker = std::make_unique<PedalPicker> (processor);
+        picker->onPickBuiltIn = [safe = juce::Component::SafePointer<MainView> (this)] (int type)
+        {
+            if (safe != nullptr)
+                safe->chain.addPedal (type);   // selects the new pedal, which closes the picker
+        };
+        picker->onPickFile = [safe = juce::Component::SafePointer<MainView> (this)] (const juce::File& file)
+        {
+            if (safe != nullptr)
+                safe->chain.addNamPedal (file);
+        };
+        blocks.showOverlay (std::move (picker), BlockEditor::Overlay::addPedal);
     }
 
     /** Opens the tuner in place of the block page (the footer button), or closes it again. */

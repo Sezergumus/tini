@@ -62,6 +62,74 @@ namespace FileLibrary
 }
 
 //==============================================================================
+/** The dialogs for the things a user can do with a library file. They only ask and report: the work
+    itself is done by the caller's function, so every list (the amp / cab browsers, the Library page,
+    the pedal picker) shares one wording and one behaviour. */
+namespace FileActions
+{
+    /** Asks for a new name (the extension stays) and calls `rename` with it. An error it returns is shown. */
+    inline void askRename (juce::Component* owner, const juce::File& file,
+                           std::function<juce::Result (const juce::String&)> rename)
+    {
+        auto* window = new juce::AlertWindow ("Rename", "New name for " + file.getFileName(), juce::MessageBoxIconType::NoIcon, owner);
+        window->addTextEditor ("name", file.getFileNameWithoutExtension());
+        window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+        window->enterModalState (true, juce::ModalCallbackFunction::create (
+            [rename = std::move (rename), window] (int result)
+            {
+                if (result != 1)
+                    return;
+
+                const auto outcome = rename (window->getTextEditorContents ("name"));
+                if (outcome.failed())
+                    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                      .withTitle ("Could not rename").withMessage (outcome.getErrorMessage())
+                                                      .withButton ("OK"), nullptr);
+            }), true);
+    }
+
+    /** Asks before moving a file to the Recycle Bin, then calls `remove`; false from it is shown as an error. */
+    inline void askDelete (const juce::File& file, std::function<bool()> remove)
+    {
+        const auto where = FileLibrary::useTrash() ? juce::String ("the Recycle Bin") : juce::String ("nowhere");
+
+        juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
+                                          .withTitle ("Delete")
+                                          .withMessage ("Move " + file.getFileName() + " to " + where + "?")
+                                          .withButton ("Delete").withButton ("Cancel"),
+                                      [file, remove = std::move (remove)] (int result)
+        {
+            if (result == 1 && ! remove())
+                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                  .withTitle ("Could not delete").withMessage (file.getFileName() + " is in use or protected.")
+                                                  .withButton ("OK"), nullptr);
+        });
+    }
+
+    /** Copies `sources` that fit `kind` into the library folder of `kind`; returns how many arrived. */
+    inline int importAll (const juce::Array<juce::File>& sources, FileLibrary::Kind kind)
+    {
+        int added = 0;
+        for (const auto& source : sources)
+            if (source.existsAsFile() && FileLibrary::fits (source, kind)
+                && FileLibrary::importFile (source, kind).existsAsFile())
+                ++added;
+        return added;
+    }
+
+    /** True if any of the dragged paths is a file `kind` can hold. */
+    inline bool anyFits (const juce::StringArray& dragged, FileLibrary::Kind kind)
+    {
+        for (const auto& path : dragged)
+            if (FileLibrary::fits (juce::File (path), kind))
+                return true;
+        return false;
+    }
+}
+
+//==============================================================================
 /** A scrolling list of the models or impulse responses in one folder. The loaded file is marked; a
     click (or Enter on the selected line) calls onPick.
 
@@ -143,11 +211,7 @@ public:
     /** Copies `sources` into this library and shows them. Returns how many were added. */
     int addFiles (const juce::Array<juce::File>& sources)
     {
-        int added = 0;
-        for (const auto& source : sources)
-            if (source.existsAsFile() && FileLibrary::fits (source, kind)
-                && FileLibrary::importFile (source, kind).existsAsFile())
-                ++added;
+        const int added = FileActions::importAll (sources, kind);
 
         if (added > 0)
         {
@@ -264,10 +328,7 @@ public:
     // Files dropped on the list are only added to the library; the loaded model stays.
     bool isInterestedInFileDrag (const juce::StringArray& dragged) override
     {
-        for (const auto& path : dragged)
-            if (FileLibrary::fits (juce::File (path), kind))
-                return true;
-        return false;
+        return FileActions::anyFits (dragged, kind);
     }
 
     void fileDragEnter (const juce::StringArray&, int, int) override { setDropHighlight (true); }
@@ -384,39 +445,17 @@ private:
 
     void askRename (const juce::File& file)
     {
-        auto* window = new juce::AlertWindow ("Rename", "New name for " + file.getFileName(), juce::MessageBoxIconType::NoIcon, this);
-        window->addTextEditor ("name", file.getFileNameWithoutExtension());
-        window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
-        window->enterModalState (true, juce::ModalCallbackFunction::create (
-            [safe = juce::Component::SafePointer<FileBrowserList> (this), file, window] (int result)
-            {
-                if (result != 1 || safe == nullptr)
-                    return;
-
-                const auto outcome = safe->renameFile (file, window->getTextEditorContents ("name"));
-                if (outcome.failed())
-                    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
-                                                      .withTitle ("Could not rename").withMessage (outcome.getErrorMessage())
-                                                      .withButton ("OK"), nullptr);
-            }), true);
+        FileActions::askRename (this, file, [safe = juce::Component::SafePointer<FileBrowserList> (this), file] (const juce::String& name)
+        {
+            return safe != nullptr ? safe->renameFile (file, name) : juce::Result::ok();
+        });
     }
 
     void askDelete (const juce::File& file)
     {
-        const auto where = FileLibrary::useTrash() ? juce::String ("the Recycle Bin") : juce::String ("nowhere");
-
-        juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
-                                          .withTitle ("Delete")
-                                          .withMessage ("Move " + file.getFileName() + " to " + where + "?")
-                                          .withButton ("Delete").withButton ("Cancel"),
-                                      [safe = juce::Component::SafePointer<FileBrowserList> (this), file] (int result)
+        FileActions::askDelete (file, [safe = juce::Component::SafePointer<FileBrowserList> (this), file]
         {
-            if (result == 1 && safe != nullptr && ! safe->deleteFile (file))
-                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon)
-                                                  .withTitle ("Could not delete").withMessage (file.getFileName() + " is in use or protected.")
-                                                  .withButton ("OK"), nullptr);
+            return safe == nullptr || safe->deleteFile (file);
         });
     }
 

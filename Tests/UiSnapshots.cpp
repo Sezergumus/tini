@@ -144,7 +144,7 @@ void renderUiSnapshots (const juce::File& dir)
 
 
     //==========================================================================
-    // Add-pedal popover: open it, look at it, pick a row.
+    // Pedal picker: open it, look at it, pick a card.
     auto settleLoop = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
 
     for (auto id : { "GATE", "BOOST", "CHORUS", "DELAY", "REVERB" })
@@ -152,6 +152,7 @@ void renderUiSnapshots (const juce::File& dir)
     settle();
 
     auto* addButton = findFirst<AddButton> (*editor);
+    auto* view0 = findFirst<MainView> (*editor);
     report (addButton != nullptr, "the chain bar has a + button");
 
     if (addButton != nullptr)
@@ -159,12 +160,13 @@ void renderUiSnapshots (const juce::File& dir)
         addButton->triggerClick();
         settleLoop (300);
         save (*editor, dir.getChildFile ("ui_add_menu.png"));
-        report (findFirst<AddPedalMenu> (*editor) != nullptr, "the + button opens the popover");
+        report (findFirst<PedalPicker> (*editor) != nullptr, "the + button opens the pedal picker in the block area");
+        report (findFirst<juce::CallOutBox> (*editor) == nullptr, "...not a popover");
+        report (addButton->getToggleState(), "...and the + button stays lit while it is open");
 
-        if (auto* box = findFirst<juce::CallOutBox> (*editor))
-            box->dismiss();
+        addButton->triggerClick();
         settleLoop (300);
-        report (findFirst<AddPedalMenu> (*editor) == nullptr, "the popover can be dismissed");
+        report (findFirst<PedalPicker> (*editor) == nullptr && ! addButton->getToggleState(), "a second click on + closes the picker");
 
         // open it again with two pedals already in the chain
         setParam (p, "GATE_ADDED", 1.0f);
@@ -175,7 +177,7 @@ void renderUiSnapshots (const juce::File& dir)
         settleLoop (300);
         save (*editor, dir.getChildFile ("ui_add_menu_partial.png"));
 
-        auto* menu = findFirst<AddPedalMenu> (*editor);
+        auto* menu = findFirst<PedalPicker> (*editor);
         auto* gateRow = menu != nullptr ? menu->findRow ("GATE_ADDED") : nullptr;
         auto* delayRow = menu != nullptr ? menu->findRow ("DELAY_ADDED") : nullptr;
         report (gateRow != nullptr && gateRow->isEnabled() && gateRow->getCopiesUsed() == 1,
@@ -186,14 +188,15 @@ void renderUiSnapshots (const juce::File& dir)
         {
             delayRow->triggerClick();
             settleLoop (400);
-            report (p.apvts.getRawParameterValue ("DELAY_ADDED")->load() > 0.5f, "picking DELAY in the popover adds it to the chain");
-            report (findFirst<AddPedalMenu> (*editor) == nullptr, "the popover closes after picking");
+            report (p.apvts.getRawParameterValue ("DELAY_ADDED")->load() > 0.5f, "picking DELAY in the picker adds it to the chain");
+            report (findFirst<PedalPicker> (*editor) == nullptr, "the picker closes after picking");
+            report (view0 != nullptr && view0->getBlocks().getShownBlock() == PedalCatalog::makeItem (5, 0), "...and the new pedal's page opens");
         }
 
         // a second gate: picking GATE again adds copy 2 with its own parameters
         addButton->triggerClick();
         settleLoop (300);
-        if (auto* again = findFirst<AddPedalMenu> (*editor))
+        if (auto* again = findFirst<PedalPicker> (*editor))
             if (auto* row = again->findRow ("GATE_ADDED"))
                 row->triggerClick();
         settleLoop (400);
@@ -1121,6 +1124,123 @@ void renderUiSnapshots (const juce::File& dir)
 
             setParam (p, "CAP_ADDED", 0.0f);
             p.unloadPedalModel (0);
+            settle();
+        }
+
+        // NAM pedals from the picker: each one is a pedal named after its model, and there is no
+        // small limit on how many can be in the chain
+        {
+            FileLibrary::rootOverride().deleteRecursively();
+            FileLibrary::ensureFolders();
+            const auto pedalsFolder = FileLibrary::libraryFolder (FileLibrary::Kind::pedals);
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (pedalsFolder.getChildFile ("Green Drive.nam"));
+            testModels.getChildFile ("test_a2.nam").copyFileTo (pedalsFolder.getChildFile ("Fuzz Face.nam"));
+
+            auto& chainBar = view->getChain();
+            chainBar.getAddButton().triggerClick();
+            settleLoop (300);
+
+            auto* picker = findFirst<PedalPicker> (*editor);
+            report (picker != nullptr, "the + button opens the picker");
+
+            if (picker != nullptr)
+            {
+                auto& library = picker->getLibrary();
+                settleLoop (300);   // the metadata is read in the background
+                report (library.getNumFiles() == 2 && library.getFile (0).getFileName() == "Fuzz Face.nam",
+                        "the picker lists the Pedals folder (" + juce::String (library.getNumFiles()) + " files)");
+                report (library.detailOf (pedalsFolder.getChildFile ("Green Drive.nam")).contains ("Microtubes"),
+                        "...with what each model says about itself (" + library.detailOf (pedalsFolder.getChildFile ("Green Drive.nam")) + ")");
+                save (*editor, dir.getChildFile ("ui_pedal_picker.png"));
+
+                picker->getSearchBox().setText ("green", true);
+                settleLoop (100);   // the editor reports its change from the message loop
+                report (library.getNumFiles() == 1 && library.getFile (0).getFileName() == "Green Drive.nam", "the search field filters the list");
+                picker->getSearchBox().setText ("", true);
+                settleLoop (100);
+                report (library.getNumFiles() == 2, "...and clearing it shows everything");
+
+                picker->pickFile (pedalsFolder.getChildFile ("Green Drive.nam"));
+                settleLoop (300);
+                for (int i = 0; i < 300 && p.pedalNam[0].getStatus().state == NamEngine::Status::State::loading; ++i)
+                    settleLoop (10);
+                settleLoop (200);
+            }
+
+            report (findFirst<PedalPicker> (*editor) == nullptr, "picking a model closes the picker");
+            report (p.apvts.getRawParameterValue ("CAP_ADDED")->load() > 0.5f && p.pedalNam[0].getFile().getFileName() == "Green Drive.nam"
+                        && p.pedalNam[0].hasModel(),
+                    "...adds a NAM pedal with that model");
+            report (blocks3.getShownBlock() == PedalCatalog::makeItem (PedalCatalog::captureType, 0), "...and opens its page");
+
+            juce::String tileTitle;
+            for (auto* tile : chainBar.getStrip().pedals)
+                if (tile->getItem() == PedalCatalog::captureType)
+                    tileTitle = tile->getTitle();
+            report (tileTitle == "Green Drive", "...named after the model (" + tileTitle + ")");
+
+            // a second model is a second pedal, a copy of the same model too
+            chainBar.addNamPedal (pedalsFolder.getChildFile ("Fuzz Face.nam"));
+            chainBar.addNamPedal (pedalsFolder.getChildFile ("Green Drive.nam"));
+            settleLoop (200);
+            report (p.apvts.getRawParameterValue ("CAP_ADDED_2")->load() > 0.5f && p.apvts.getRawParameterValue ("CAP_ADDED_3")->load() > 0.5f
+                        && p.pedalNam[1].getFile().getFileName() == "Fuzz Face.nam" && p.pedalNam[2].getFile().getFileName() == "Green Drive.nam",
+                    "more NAM pedals take the next free copies, each with its own model");
+
+            // past three copies: the chain keeps taking NAM pedals
+            int added = 3;
+            while (added < PedalCatalog::namCopies && chainBar.addNamPedal (pedalsFolder.getChildFile ("Green Drive.nam")))
+                ++added;
+            settleLoop (200);
+            report (added == PedalCatalog::namCopies, "a fourth NAM pedal and beyond can be added (" + juce::String (added) + ")");
+
+            int namTiles = 0;
+            for (auto* tile : chainBar.getStrip().pedals)
+                namTiles += PedalCatalog::typeOf (tile->getItem()) == PedalCatalog::captureType ? 1 : 0;
+            report (namTiles == added, "...and every one is a tile in the chain (" + juce::String (namTiles) + ")");
+            save (*editor, dir.getChildFile ("ui_many_nam_pedals.png"));
+
+            report (! chainBar.addNamPedal (pedalsFolder.getChildFile ("Green Drive.nam")), "only when every NAM slot is used is another one refused");
+
+            // removing a NAM pedal frees its slot and its model
+            {
+                BlockTile* second = nullptr;
+                for (auto* tile : chainBar.getStrip().pedals)
+                    if (PedalCatalog::copyOf (tile->getItem()) == 1 && PedalCatalog::typeOf (tile->getItem()) == PedalCatalog::captureType)
+                        second = tile;
+
+                report (second != nullptr, "the second NAM pedal has a tile");
+                if (second != nullptr && second->onRemove)
+                {
+                    second->onRemove();
+                    settleLoop (300);
+                    report (p.apvts.getRawParameterValue ("CAP_ADDED_2")->load() < 0.5f && ! p.pedalNam[1].hasModel()
+                                && p.pedalNam[1].getFile() == juce::File(),
+                            "removing a NAM pedal unloads its model");
+                }
+            }
+
+            // a pedal capture dropped on the window joins the chain
+            {
+                auto text = pedalsFolder.getChildFile ("Green Drive.nam").loadFileAsString();
+                text = text.replace ("\"gear_type\": \"amp\"", "\"gear_type\": \"pedal\"");
+                const auto dropped = outside.getChildFile ("Dropped Pedal.nam");
+                dropped.replaceWithText (text);
+
+                const int before = chainBar.getStrip().pedals.size();
+                view->filesDropped ({ dropped.getFullPathName() }, 10, 10);
+                settleLoop (400);
+                report (pedalsFolder.getChildFile ("Dropped Pedal.nam").existsAsFile(), "a dropped model whose gear type is pedal lands in Pedals");
+                report (chainBar.getStrip().pedals.size() == before + 1 && p.pedalNam[1].getFile().getFileName() == "Dropped Pedal.nam",
+                        "...and joins the chain as a NAM pedal");
+            }
+
+            for (int copy = 0; copy < PedalCatalog::namCopies; ++copy)
+            {
+                setParam (p, PedalCatalog::addedId (PedalCatalog::makeItem (PedalCatalog::captureType, copy)), 0.0f);
+                p.unloadPedalModel (copy);
+            }
+            view->getChain().select (PedalCatalog::ampItem);
             settle();
         }
 
