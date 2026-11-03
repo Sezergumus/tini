@@ -10,6 +10,39 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(juce)
 
+# Neural Amp Modeler core (MIT) and Eigen (MPL2), both downloaded at configure time like JUCE.
+# The core's own CMake project (command line tools) is not used: SOURCE_SUBDIR points at a folder
+# that does not exist so FetchContent only downloads it, and the library is built below.
+# Eigen is pinned to the commit the NAM core release was tested with.
+FetchContent_Declare(
+    nam_core
+    GIT_REPOSITORY https://github.com/sdatkinson/NeuralAmpModelerCore.git
+    GIT_TAG        v0.6.0
+    GIT_SHALLOW    TRUE
+    GIT_SUBMODULES ""            # Eigen is fetched separately; AudioDSPTools is not needed
+    SOURCE_SUBDIR  do_not_add_subdirectory
+)
+FetchContent_Declare(
+    eigen
+    URL https://gitlab.com/libeigen/eigen/-/archive/bc3b39870ecb690a623a3f49149a358b95c5781d/eigen-bc3b39870ecb690a623a3f49149a358b95c5781d.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR  do_not_add_subdirectory
+)
+FetchContent_MakeAvailable(nam_core eigen)
+
+file(GLOB NAM_CORE_SOURCES "${nam_core_SOURCE_DIR}/NAM/*.cpp" "${nam_core_SOURCE_DIR}/NAM/*/*.cpp")
+add_library(nam_core_lib STATIC ${NAM_CORE_SOURCES})
+target_include_directories(nam_core_lib SYSTEM PUBLIC
+    "${nam_core_SOURCE_DIR}"
+    "${nam_core_SOURCE_DIR}/Dependencies/nlohmann"
+    "${eigen_SOURCE_DIR}")
+target_compile_features(nam_core_lib PUBLIC cxx_std_20)
+target_compile_definitions(nam_core_lib PUBLIC NAM_SAMPLE_FLOAT NOMINMAX)   # float processing, like the rest of the engine
+set_target_properties(nam_core_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(nam_core_lib PRIVATE /W0 /bigobj "$<$<CONFIG:Release>:/O2>")
+endif()
+
 # Define the project as both VST3 plugin and standalone application
 juce_add_plugin(NeuralFlowAmp
     COMPANY_NAME "YourName"
@@ -91,6 +124,7 @@ target_link_libraries(NeuralFlowAmp PRIVATE
     juce::juce_audio_processors
     juce::juce_dsp 
     juce::juce_gui_extra
+    nam_core_lib
 )
 
 # Special configuration for standalone (executable) version
@@ -111,6 +145,7 @@ target_compile_definitions(NeuralFlowAmpTests PRIVATE
 
 target_link_libraries(NeuralFlowAmpTests PRIVATE
     NeuralFlowAmp
+    nam_core_lib
     juce::juce_audio_utils
     juce::juce_audio_processors
     juce::juce_dsp

@@ -1,5 +1,6 @@
 // Minimal headless checks for the audio engine. Exit code 0 = all passed.
 #include "../Source/PluginProcessor.h"
+#include "NAM/get_dsp.h"
 
 namespace
 {
@@ -454,6 +455,23 @@ namespace
     }
 
     //==========================================================================
+    void testNamCoreIsLinked()
+    {
+        std::printf ("\n-- NAM core --\n");
+
+        bool threw = false;
+        try
+        {
+            auto model = nam::get_dsp (std::filesystem::path ("this_model_does_not_exist.nam"));
+        }
+        catch (const std::exception&)
+        {
+            threw = true;
+        }
+        check (threw, "the NAM core is linked and refuses a missing model file");
+    }
+
+    //==========================================================================
     void testPedalCopies()
     {
         std::printf ("\n-- pedal copies --\n");
@@ -792,6 +810,7 @@ int main (int argc, char** argv)
     testCompressor();
     testAddOnPedals();
     testChainOrder();
+    testNamCoreIsLinked();
     testPedalCopies();
     testPresets();
     testPresetEditing();
