@@ -7,8 +7,9 @@
 
 //==============================================================================
 /** The bottom strip of the Rig: the input meter on the left, the output meter on the right, and in
-    the middle the Tuner button with the audio device in plain text. Each meter also carries a gain
-    line (input / output level in dB). Everything is centred on the strip's middle line. */
+    the middle the Tuner button, and the audio device in plain text between the In meter and the
+    Tuner. Each meter also carries a gain line (input / output level in dB). Everything is centred
+    on the strip's middle line. */
 class Footer : public juce::Component
 {
 public:
@@ -58,13 +59,18 @@ public:
     {
         auto b = getLocalBounds();
 
-        inMeter.setBounds (b.removeFromLeft (meterWidth));
-        outMeter.setBounds (b.removeFromRight (meterWidth));
-        b.reduce (24, 0);
+        const int meterW = juce::jlimit (160, 240, b.getWidth() / 5);
+        auto left  = b.removeFromLeft (meterW);
+        auto right = b.removeFromRight (meterW);
+        inMeter.setBounds (left);
+        outMeter.setBounds (right);
 
-        tunerButton.setBounds (b.removeFromLeft (76).withSizeKeepingCentre (76, 28));
-        b.removeFromLeft (16);
-        infoArea = b.toFloat();
+        // The Tuner button sits on the middle line of the strip, whatever the meters take.
+        tunerButton.setBounds (juce::Rectangle<int> (76, 28).withCentre (getLocalBounds().getCentre()));
+
+        // The device text uses the space between the In meter and the Tuner button.
+        infoArea = juce::Rectangle<int> (left.getRight() + 24, 0,
+                                         tunerButton.getX() - left.getRight() - 48, getHeight()).toFloat();
     }
 
     const juce::String& getAudioInfo() const { return audioInfo; }
@@ -73,8 +79,6 @@ public:
     LevelMeter inMeter, outMeter;
 
 private:
-    static constexpr int meterWidth = 300;
-
     void updateAudioInfo()
     {
         const double sr = processor.getSampleRate();
