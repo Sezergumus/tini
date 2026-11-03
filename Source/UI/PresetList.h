@@ -33,9 +33,9 @@ public:
         nameEditor.onFocusLost  = [this] { if (mode == Mode::renaming) cancel(); };
         addChildComponent (nameEditor);
 
-        confirmButton.setButtonText ("DELETE");
+        confirmButton.setButtonText ("Delete");
         confirmButton.onClick = [this] { if (onDeleteConfirmed) onDeleteConfirmed(); };
-        keepButton.setButtonText ("KEEP");
+        keepButton.setButtonText ("Keep");
         keepButton.onClick = [this] { cancel(); };
         addChildComponent (confirmButton);
         addChildComponent (keepButton);
@@ -124,7 +124,7 @@ public:
             g.drawRoundedRectangle (r.reduced (0.5f), 7.0f, 1.0f);
 
             g.setColour (Theme::textHi);
-            g.setFont (Theme::ui (11.5f, true, 0.06f));
+            g.setFont (Theme::ui (12.0f, true));
             g.drawText ("Delete \"" + name + "\"?", r.reduced (14.0f, 0.0f).withTrimmedRight (132.0f),
                         juce::Justification::centredLeft, true);
             return;
@@ -158,7 +158,7 @@ public:
 
         auto text = r.withTrimmedLeft (34.0f).withTrimmedRight (hover && ! factory ? 70.0f : 14.0f);
         g.setColour (current ? Theme::accent.brighter (0.25f) : Theme::textHi);
-        g.setFont (Theme::ui (13.0f, current, 0.05f));
+        g.setFont (Theme::ui (13.0f, current));
         g.drawText (name, text, juce::Justification::centredLeft, true);
 
         if (hover && ! factory)
@@ -309,13 +309,13 @@ public:
         auto header = b.withTrimmedTop (padding).removeFromTop (headerHeight);
 
         g.setColour (Theme::textHi);
-        g.setFont (Theme::ui (12.0f, true, 0.2f));
-        g.drawText ("PRESETS", header.withTrimmedBottom (4), juce::Justification::centredLeft, false);
+        g.setFont (Theme::ui (14.0f, true));
+        g.drawText ("Presets", header.withTrimmedBottom (4), juce::Justification::centredLeft, false);
 
         const auto& pm = processor.presets;
         g.setColour (Theme::textLo);
-        g.setFont (Theme::ui (9.0f, true, 0.18f));
-        g.drawText (juce::String (pm.getNumFactory()) + " FACTORY   " + juce::String (pm.size() - pm.getNumFactory()) + " USER",
+        g.setFont (Theme::ui (11.0f));
+        g.drawText (juce::String (pm.getNumFactory()) + " factory" + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")) + juce::String (pm.size() - pm.getNumFactory()) + " user",
                     header.withTrimmedBottom (4), juce::Justification::centredRight, false);
 
         g.setColour (Theme::divider.withAlpha (0.10f));
@@ -323,9 +323,9 @@ public:
 
         auto footer = getLocalBounds().removeFromBottom (footerHeight + padding).reduced (padding + 6, 0).withHeight (footerHeight);
         footer.setY (getHeight() - padding - footerHeight);
-        g.setFont (Theme::ui (8.5f, true, 0.14f));
+        g.setFont (Theme::ui (11.0f));
         g.setColour (hint.isNotEmpty() ? Theme::danger : Theme::textLo);
-        g.drawText ((hint.isNotEmpty() ? hint : juce::String ("Hover one of your presets to rename or delete it")).toUpperCase(),
+        g.drawText ((hint.isNotEmpty() ? hint : juce::String ("Hover one of your presets to rename or delete it")),
                     footer, juce::Justification::centredLeft, true);
     }
 
@@ -437,7 +437,7 @@ private:
         {
             auto title = [&] (const juce::String& text, int y)
             {
-                const auto font = Theme::ui (9.0f, true, 0.22f);
+                const auto font = Theme::ui (11.0f);
                 g.setColour (Theme::textLo);
                 g.setFont (font);
                 g.drawText (text, 16, y + 8, 120, sectionHeight - 8, juce::Justification::centredLeft, false);
@@ -447,14 +447,14 @@ private:
                 g.fillRect (16.0f + tw + 10.0f, (float) y + (float) sectionHeight * 0.5f + 4.0f, (float) getWidth() - tw - 40.0f, 1.0f);
             };
 
-            title ("FACTORY", factoryTitleY);
-            title ("USER", userTitleY);
+            title ("Factory", factoryTitleY);
+            title ("User", userTitleY);
 
             if (emptyY >= 0)
             {
                 g.setColour (Theme::textLo);
-                g.setFont (Theme::ui (10.5f, false, 0.04f));
-                g.drawText ("Nothing saved yet - press SAVE to keep your setup", 16, emptyY, getWidth() - 32, PresetRow::height,
+                g.setFont (Theme::ui (11.5f));
+                g.drawText ("Nothing saved yet - press Save to keep your setup", 16, emptyY, getWidth() - 32, PresetRow::height,
                             juce::Justification::centredLeft, true);
             }
         }

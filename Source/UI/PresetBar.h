@@ -28,11 +28,11 @@ public:
         nameEditor.onEscapeKey  = [this] { close(); };
         addAndMakeVisible (nameEditor);
 
-        saveButton.setButtonText ("SAVE");
+        saveButton.setButtonText ("Save");
         saveButton.onClick = [this] { save(); };
         addAndMakeVisible (saveButton);
 
-        cancelButton.setButtonText ("CANCEL");
+        cancelButton.setButtonText ("Cancel");
         cancelButton.onClick = [this] { close(); };
         addAndMakeVisible (cancelButton);
 
@@ -84,12 +84,12 @@ public:
         auto b = getLocalBounds().reduced (padding, 0);
 
         g.setColour (Theme::textHi);
-        g.setFont (Theme::ui (12.0f, true, 0.2f));
-        g.drawText ("SAVE PRESET", b.withTrimmedTop (padding).removeFromTop (18), juce::Justification::centredLeft, false);
+        g.setFont (Theme::ui (14.0f, true));
+        g.drawText ("Save preset", b.withTrimmedTop (padding).removeFromTop (18), juce::Justification::centredLeft, false);
 
         g.setColour (hintColour);
-        g.setFont (Theme::ui (9.0f, true, 0.12f));
-        g.drawText (hint.toUpperCase(), hintArea, juce::Justification::centredLeft, true);
+        g.setFont (Theme::ui (11.5f));
+        g.drawText (hint, hintArea, juce::Justification::centredLeft, true);
     }
 
     void resized() override
@@ -119,7 +119,7 @@ private:
         const bool overwrite = valid.wasOk() && presets.wouldOverwrite (name);
 
         saveButton.setEnabled (valid.wasOk());
-        saveButton.setButtonText (overwrite ? "REPLACE" : "SAVE");
+        saveButton.setButtonText (overwrite ? "Replace" : "Save");
 
         if (valid.failed())
         {
@@ -129,7 +129,7 @@ private:
         else if (overwrite)
         {
             hint = "Replaces your preset with the same name";
-            hintColour = Theme::amber;
+            hintColour = Theme::textMid;
         }
         else
         {
@@ -168,12 +168,11 @@ public:
     {
         auto r = getLocalBounds().toFloat().reduced (0.5f);
 
-        g.setColour (down ? Theme::accent.withAlpha (0.25f)
-                          : highlighted ? Theme::accent.withAlpha (0.14f)
-                                        : juce::Colours::white.withAlpha (0.05f));
-        g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (highlighted || down ? Theme::accent.withAlpha (0.85f) : juce::Colour (0xff343b43));
-        g.drawRoundedRectangle (r, 5.0f, 1.0f);
+        if (highlighted || down)
+        {
+            g.setColour (juce::Colours::white.withAlpha (down ? 0.12f : 0.07f));
+            g.fillRoundedRectangle (r, 6.0f);
+        }
 
         const auto c = r.getCentre();
         const float dx = right ? 2.5f : -2.5f;
@@ -182,7 +181,7 @@ public:
         chevron.lineTo (c.x + dx, c.y);
         chevron.lineTo (c.x - dx, c.y + 5.0f);
 
-        g.setColour (highlighted ? Theme::accent.brighter (0.3f) : Theme::textHi);
+        g.setColour (highlighted ? Theme::textHi : Theme::textMid);
         g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
@@ -213,13 +212,8 @@ public:
     void paintButton (juce::Graphics& g, bool highlighted, bool down) override
     {
         auto r = getLocalBounds().toFloat().reduced (0.5f);
-        Theme::drawInset (g, r.expanded (0.5f), 5.0f);
-
-        if (highlighted || down)
-        {
-            g.setColour (Theme::accent.withAlpha (0.70f));
-            g.drawRoundedRectangle (r, 5.0f, 1.0f);
-        }
+        g.setColour (highlighted || down ? Theme::surfaceHi : Theme::surface);
+        g.fillRoundedRectangle (r.expanded (0.5f), 6.0f);
 
         auto inner = r.reduced (12.0f, 0.0f);
 
@@ -228,33 +222,32 @@ public:
         juce::Path tri;
         tri.addTriangle (arrow.getX(), arrow.getCentreY() - 2.0f, arrow.getRight(), arrow.getCentreY() - 2.0f,
                          arrow.getCentreX(), arrow.getCentreY() + 3.5f);
-        g.setColour (highlighted ? Theme::accent : Theme::textMid);
+        g.setColour (highlighted ? Theme::textHi : Theme::textMid);
         g.fillPath (tri);
         inner.removeFromRight (8.0f);
 
         // factory / user tag
         if (tag.isNotEmpty())
         {
-            const auto tagFont = Theme::ui (8.5f, true, 0.2f);
-            auto tagArea = inner.removeFromRight (tagFont.getStringWidthFloat (tag) + 2.0f);
+            const auto tagFont = Theme::ui (11.0f);
+            const auto tagText = Theme::titleCase (tag);
+            auto tagArea = inner.removeFromRight (tagFont.getStringWidthFloat (tagText) + 2.0f);
             inner.removeFromRight (8.0f);
             g.setColour (Theme::textLo);
             g.setFont (tagFont);
-            g.drawText (tag, tagArea, juce::Justification::centredRight, false);
+            g.drawText (tagText, tagArea, juce::Justification::centredRight, false);
         }
 
         // "edited" dot
         if (edited)
         {
             auto dot = inner.removeFromLeft (14.0f);
-            g.setColour (Theme::amber.withAlpha (0.25f));
-            g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre (dot.getCentre().translated (-2.0f, 0.0f)));
-            g.setColour (Theme::amber);
+            g.setColour (Theme::accent);
             g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (dot.getCentre().translated (-2.0f, 0.0f)));
         }
 
         g.setColour (Theme::textHi);
-        g.setFont (Theme::ui (13.0f, true, 0.06f));
+        g.setFont (Theme::ui (13.0f, true));
         g.drawText (name, inner, juce::Justification::centredLeft, true);
     }
 
@@ -282,7 +275,7 @@ public:
         nextButton.onClick = [this] { step (+1); };
         nameButton.onClick = [this] { showList(); };
 
-        saveButton.setButtonText ("SAVE");
+        saveButton.setButtonText ("Save");
         saveButton.onClick = [this] { showSaveDialog(); };
 
         for (auto* c : std::initializer_list<juce::Component*> { &prevButton, &nameButton, &nextButton, &saveButton })
