@@ -189,7 +189,7 @@ private:
     bool right;
 };
 
-/** The preset name field: click to open the list. */
+/** The preset name: plain text in the header. Click it to open the list; it lights up on hover. */
 class PresetNameButton : public juce::Button
 {
 public:
@@ -198,13 +198,12 @@ public:
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
 
-    void setContent (const juce::String& newName, const juce::String& newTag, bool isEdited)
+    void setContent (const juce::String& newName, bool isEdited)
     {
-        if (name == newName && tag == newTag && edited == isEdited)
+        if (name == newName && edited == isEdited)
             return;
 
         name = newName;
-        tag = newTag;
         edited = isEdited;
         repaint();
     }
@@ -212,61 +211,35 @@ public:
     void paintButton (juce::Graphics& g, bool highlighted, bool down) override
     {
         auto r = getLocalBounds().toFloat().reduced (0.5f);
-        g.setColour (highlighted || down ? Theme::surfaceHi : Theme::surface);
-        g.fillRoundedRectangle (r.expanded (0.5f), 6.0f);
 
-        auto inner = r.reduced (12.0f, 0.0f);
-
-        // drop-down arrow
-        auto arrow = inner.removeFromRight (10.0f);
-        juce::Path tri;
-        tri.addTriangle (arrow.getX(), arrow.getCentreY() - 2.0f, arrow.getRight(), arrow.getCentreY() - 2.0f,
-                         arrow.getCentreX(), arrow.getCentreY() + 3.5f);
-        g.setColour (highlighted ? Theme::textHi : Theme::textMid);
-        g.fillPath (tri);
-        inner.removeFromRight (8.0f);
-
-        // factory / user tag
-        if (tag.isNotEmpty())
+        if (highlighted || down)
         {
-            const auto tagFont = Theme::ui (11.0f);
-            const auto tagText = Theme::titleCase (tag);
-            auto tagArea = inner.removeFromRight (tagFont.getStringWidthFloat (tagText) + 2.0f);
-            inner.removeFromRight (8.0f);
-            g.setColour (Theme::textLo);
-            g.setFont (tagFont);
-            g.drawText (tagText, tagArea, juce::Justification::centredRight, false);
-        }
-
-        // "edited" dot
-        if (edited)
-        {
-            auto dot = inner.removeFromLeft (14.0f);
-            g.setColour (Theme::accent);
-            g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (dot.getCentre().translated (-2.0f, 0.0f)));
+            g.setColour (juce::Colours::white.withAlpha (down ? 0.10f : 0.06f));
+            g.fillRoundedRectangle (r, 6.0f);
         }
 
         g.setColour (Theme::textHi);
-        g.setFont (Theme::ui (13.0f, true));
-        g.drawText (name, inner, juce::Justification::centredLeft, true);
+        g.setFont (Theme::ui (14.0f, true));
+        g.drawText (name, r.reduced (10.0f, 0.0f), juce::Justification::centred, true);
     }
 
     const juce::String& getDisplayedName() const { return name; }
-    const juce::String& getTag() const { return tag; }
     bool isEdited() const { return edited; }
 
 private:
-    juce::String name, tag;
+    juce::String name;
     bool edited = false;
 };
 
 //==============================================================================
-/** Header control for presets:  < [ name v ] >  [SAVE].
-    The arrows step through factory and user presets, the name opens the list. */
+/** Header control for presets:  < name >  [Save].
+    The arrows step through factory and user presets, the name opens the list. The Save button is only
+    there while the preset was changed (or is still untitled), and says "Saved" for a moment afterwards. */
 class PresetBar : public juce::Component
 {
 public:
-    static constexpr int width = 372, height = 30;
+    static constexpr int width = 460, height = 30;      // the arrows and the name sit in the middle,
+    static constexpr int navWidth = 300;                // Save appears to the right of them
 
     explicit PresetBar (NeuralFlowAmpAudioProcessor& p)
         : processor (p), prevButton (false), nextButton (true)
@@ -278,8 +251,9 @@ public:
         saveButton.setButtonText ("Save");
         saveButton.onClick = [this] { showSaveDialog(); };
 
-        for (auto* c : std::initializer_list<juce::Component*> { &prevButton, &nameButton, &nextButton, &saveButton })
+        for (auto* c : std::initializer_list<juce::Component*> { &prevButton, &nameButton, &nextButton })
             addAndMakeVisible (c);
+        addChildComponent (saveButton);
 
         refresh();
     }
@@ -289,22 +263,25 @@ public:
     {
         const int index = processor.getCurrentPresetIndex();
 
-        juce::String name = "Untitled", tag;
+        juce::String name = "Untitled";
         if (index >= 0)
-        {
-            const auto& preset = processor.presets.get (index);
-            name = preset.name;
-            tag = preset.factory ? "FACTORY" : "USER";
-        }
+            name = processor.presets.get (index).name;
+
+        const bool modified = index < 0 || processor.isPresetModified();
+        nameButton.setContent (name, index >= 0 && modified);
 
         if (savedFrames > 0)
         {
             --savedFrames;
-            nameButton.setContent (name, "SAVED", false);
+            saveButton.setButtonText ("Saved");
+            saveButton.setEnabled (false);
+            saveButton.setVisible (true);
         }
         else
         {
-            nameButton.setContent (name, tag, index >= 0 && processor.isPresetModified());
+            saveButton.setButtonText ("Save");
+            saveButton.setEnabled (true);
+            saveButton.setVisible (modified);
         }
     }
 
@@ -366,7 +343,7 @@ public:
         {
             if (safe != nullptr)
             {
-                safe->savedFrames = 90;   // ~1.5 s of "SAVED"
+                safe->savedFrames = 90;   // ~1.5 s of "Saved"
                 safe->refresh();
             }
         };
@@ -386,13 +363,15 @@ public:
     void resized() override
     {
         auto b = getLocalBounds();
-        prevButton.setBounds (b.removeFromLeft (28));
-        b.removeFromLeft (6);
-        saveButton.setBounds (b.removeFromRight (64));
-        b.removeFromRight (10);
-        nextButton.setBounds (b.removeFromRight (28));
-        b.removeFromRight (6);
-        nameButton.setBounds (b);
+        auto nav = b.withSizeKeepingCentre (navWidth, b.getHeight());
+
+        saveButton.setBounds (juce::Rectangle<int> (64, b.getHeight()).withX (nav.getRight() + 10));
+
+        prevButton.setBounds (nav.removeFromLeft (28));
+        nav.removeFromLeft (6);
+        nextButton.setBounds (nav.removeFromRight (28));
+        nav.removeFromRight (6);
+        nameButton.setBounds (nav);
     }
 
     PresetNameButton& getNameButton() { return nameButton; }

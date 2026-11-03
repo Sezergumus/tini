@@ -403,6 +403,42 @@ void renderUiSnapshots (const juce::File& dir)
         click (chainBar->getStrip().getAmpTile());
         report (blocks->getShownBlock() == PedalCatalog::ampItem, "clicking the amp tile opens the amp page");
 
+        // the dot of a tile is the bypass switch, and the tile shows its main value
+        if (gateTile != nullptr)
+        {
+            const bool before = p.apvts.getRawParameterValue ("GATE_ON")->load() > 0.5f;
+            gateTile->getDot().triggerClick();
+            settleLoop (50);
+            report ((p.apvts.getRawParameterValue ("GATE_ON")->load() > 0.5f) != before, "clicking the dot on a tile toggles the pedal");
+            report (gateTile->isActive() != before, "...and the tile follows it");
+            gateTile->getDot().triggerClick();
+            settleLoop (50);
+
+            report (gateTile->getDetail().startsWith ("Thresh") && gateTile->getDetail().endsWith ("dB"),
+                    "a pedal tile shows its first knob: " + gateTile->getDetail());
+            setParam (p, "GATE_THRESH", -33.0f);
+            settleLoop (100);
+            report (gateTile->getDetail().contains ("-33"), "...and follows the knob: " + gateTile->getDetail());
+        }
+
+        report (chainBar->getStrip().getAmpTile().getDetail().startsWith ("Drive"),
+                "the amp tile shows Drive for the built-in amp: " + chainBar->getStrip().getAmpTile().getDetail());
+        report (chainBar->getCabTile().getDetail().isNotEmpty(), "the cab tile shows its IR line: " + chainBar->getCabTile().getDetail());
+        report (chainBar->getHeight() == 176 && BlockTile::width == 132 && BlockTile::height == 104, "the chain strip uses big tiles");
+
+        // footer: meters and the audio device live here, not in the header
+        if (auto* footer = findFirst<Footer> (*editor))
+        {
+            report (footer->getAudioInfo().contains ("kHz"), "the footer shows the audio device: " + footer->getAudioInfo());
+            report (footer->getHeight() == Footer::height && footer->getBottom() <= Theme::designHeight, "the footer sits at the bottom");
+            report (footer->inMeter.getX() < footer->getTunerButton().getX() && footer->outMeter.getX() > footer->getTunerButton().getX(),
+                    "In is on the left, Out on the right, Tuner in the middle");
+        }
+        else
+        {
+            report (false, "the editor has a footer");
+        }
+
         for (auto id : { "GATE", "BOOST", "CHORUS", "DELAY", "REVERB" })
             setParam (p, juce::String (id) + "_ADDED", 0.0f);
         settle();
@@ -492,7 +528,8 @@ void renderUiSnapshots (const juce::File& dir)
             return n;
         };
 
-        report (shownName() == "Default" && nameBtn.getTag() == "FACTORY", "the preset bar shows the current preset: " + shownName());
+        report (shownName() == "Default", "the preset bar shows the current preset: " + shownName());
+        report (! bar->getSaveButton().isVisible(), "an unchanged preset shows no Save button");
 
         p.loadPreset (p.presets.indexOf ("Classic Lead"));
         settle();
@@ -528,6 +565,8 @@ void renderUiSnapshots (const juce::File& dir)
         settle();
         settleLoop (200);
         report (nameBtn.isEdited(), "turning a knob marks the preset as edited");
+        report (bar->getSaveButton().isVisible(), "...and the Save button appears right of the name");
+        report (bar->getSaveButton().getX() > bar->getNameButton().getRight(), "...to the right of the name");
         save (*editor, dir.getChildFile ("ui_preset_edited.png"));
 
         // save dialog
@@ -557,7 +596,7 @@ void renderUiSnapshots (const juce::File& dir)
             report (findFirst<SavePresetPanel> (*editor) == nullptr, "the dialog closes after saving");
             report (p.presets.indexOf ("UI Test Tone") >= p.presets.getNumFactory(), "the preset was added to the list");
             report (shownName() == "UI Test Tone" && ! nameBtn.isEdited(), "the bar shows the saved preset: " + shownName());
-            report (nameBtn.getTag() == "SAVED", "the bar confirms with SAVED");
+            report (bar->getSaveButton().isVisible() && bar->getSaveButton().getButtonText() == "Saved", "the Save button confirms with Saved");
             save (*editor, dir.getChildFile ("ui_after_save.png"));
         }
 
@@ -568,9 +607,14 @@ void renderUiSnapshots (const juce::File& dir)
         settleLoop (300);
         report (shownName() == "UI Test Tone", "the saved preset is the last one in the list: " + shownName());
         report (std::abs (p.apvts.getRawParameterValue ("DRIVE")->load() - 70.0f) < 0.01f, "...and restores the saved settings");
-        report (nameBtn.getTag() == "USER" || nameBtn.getTag() == "SAVED", "...and is tagged as a user preset");
+        settleLoop (2000);
+        report (! bar->getSaveButton().isVisible(), "the Save button goes away again once nothing is changed");
 
         // opening the dialog on a user preset suggests its own name, and saving replaces it
+        setParam (p, "DRIVE", 72.0f);
+        settle();
+        settleLoop (200);
+        report (bar->getSaveButton().isVisible(), "changing the user preset brings the Save button back");
         bar->getSaveButton().triggerClick();
         settleLoop (300);
         if (auto* again = findFirst<SavePresetPanel> (*editor))

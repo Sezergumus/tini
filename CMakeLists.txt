@@ -91,6 +91,7 @@ target_sources(NeuralFlowAmp PRIVATE
     Source/UI/NeuralLookAndFeel.h
     Source/UI/Widgets.h
     Source/UI/Panels.h
+    Source/UI/Footer.h
     Source/UI/MainView.h
     Source/UI/BlockPages.h
     Source/UI/PresetBar.h

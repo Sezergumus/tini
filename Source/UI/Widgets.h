@@ -156,7 +156,8 @@ private:
 };
 
 //==============================================================================
-/** Slim vertical peak meter: one colour, a small peak-hold tick, red only while it clips. */
+/** Slim horizontal peak meter: a label on the left, a thin bar, small dB marks under it. One colour,
+    a small peak-hold tick, red only while it clips. */
 class LevelMeter : public juce::Component
 {
 public:
@@ -183,32 +184,44 @@ public:
     {
         auto r = getLocalBounds().toFloat();
 
+        auto label = r.removeFromLeft (labelWidth);
         g.setColour (Theme::textLo);
         g.setFont (Theme::ui (11.0f));
-        g.drawText (title, r.removeFromTop (16.0f), juce::Justification::centred, false);
-        r.removeFromTop (4.0f);
+        g.drawText (title, label.withHeight (barHeight + 8.0f), juce::Justification::centredLeft, false);
 
-        auto bar = r.withSizeKeepingCentre (6.0f, r.getHeight());
+        auto bar = r.withTrimmedRight (14.0f).withHeight (barHeight).withY (r.getY() + 4.0f);   // room for the "0" mark
         g.setColour (Theme::trackBg);
-        g.fillRoundedRectangle (bar, 3.0f);
+        g.fillRoundedRectangle (bar, barHeight * 0.5f);
 
-        const float h = bar.getHeight() * Theme::dbToUnit (shown, floorDb);
-        if (h > 0.5f)
+        const float w = bar.getWidth() * Theme::dbToUnit (shown, floorDb);
+        if (w > 0.5f)
         {
             g.setColour (isClipping() ? Theme::danger : Theme::accent);
-            g.fillRoundedRectangle (bar.withTop (bar.getBottom() - h), 3.0f);
+            g.fillRoundedRectangle (bar.withWidth (w), barHeight * 0.5f);
         }
 
         if (peak > floorDb + 1.0f)
         {
-            const float py = bar.getBottom() - bar.getHeight() * Theme::dbToUnit (peak, floorDb);
+            const float px = bar.getX() + bar.getWidth() * Theme::dbToUnit (peak, floorDb);
             g.setColour (isClipping() ? Theme::danger : Theme::textMid);
-            g.fillRect (bar.getX() - 2.0f, py - 1.0f, bar.getWidth() + 4.0f, 2.0f);
+            g.fillRect (px - 1.0f, bar.getY() - 2.0f, 2.0f, bar.getHeight() + 4.0f);
+        }
+
+        // dB marks under the bar
+        g.setFont (Theme::ui (9.5f));
+        g.setColour (Theme::textLo);
+        for (const int mark : { -48, -24, -12, -6, 0 })
+        {
+            const float x = bar.getX() + bar.getWidth() * Theme::dbToUnit ((float) mark, floorDb);
+            g.drawText (juce::String (mark), juce::Rectangle<float> (x - 14.0f, bar.getBottom() + 4.0f, 28.0f, 12.0f),
+                        juce::Justification::centred, false);
         }
     }
 
 private:
     static constexpr float floorDb = -60.0f;
+    static constexpr float labelWidth = 28.0f;
+    static constexpr float barHeight = 6.0f;
     juce::String title;
     float shown = floorDb, peak = floorDb;
     int holdFrames = 0;

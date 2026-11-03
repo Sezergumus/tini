@@ -53,26 +53,76 @@ public:
 };
 
 //==============================================================================
-/** One block in the chain strip: a pedal, the amp or the cab. It shows the name, a dot in the colour
-    of the block (lit while the block is active, a hollow ring while a pedal is bypassed) and, for the
-    amp and the cab, one line of detail. Click it to open its page; pedals and the amp can be dragged. */
+/** The round dot of a tile. On a pedal it is the bypass switch (lit = active, hollow ring = bypassed);
+    on the amp and the cab it only shows that the block is on. */
+class TileDot : public juce::Button
+{
+public:
+    TileDot() : juce::Button ("bypass") {}
+
+    void setTint (juce::Colour c) { tint = c; }
+
+    /** Pedals toggle through their attachment; the amp and the cab do not react to clicks. */
+    void setSwitchable (bool canSwitch)
+    {
+        setClickingTogglesState (canSwitch);
+        setMouseCursor (canSwitch ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::DraggingHandCursor);
+        setInterceptsMouseClicks (canSwitch, false);
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool) override
+    {
+        const auto dotArea = juce::Rectangle<float> (10.0f, 10.0f).withCentre (getLocalBounds().toFloat().getCentre());
+        const bool on = getToggleState();
+
+        if (highlighted && getClickingTogglesState())
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.08f));
+            g.fillEllipse (dotArea.expanded (6.0f));
+        }
+
+        if (on)
+        {
+            g.setColour (tint);
+            g.fillEllipse (dotArea);
+        }
+        else
+        {
+            g.setColour (Theme::textLo);
+            g.drawEllipse (dotArea.reduced (0.75f), 1.5f);
+        }
+    }
+
+private:
+    juce::Colour tint = Theme::accent;
+};
+
+//==============================================================================
+/** One block in the chain strip: a pedal, the amp or the cab. It shows a dot in the colour of the
+    block (the bypass switch on a pedal), the name and one line with the main value ("Time 380 ms",
+    the model name, the IR name). Click it to open its page; pedals and the amp can be dragged. */
 class BlockTile : public juce::Component
 {
 public:
-    static constexpr int width = 104, height = 64;
+    static constexpr int width = 132, height = 104;
 
     /** `block` is a pedal item (see PedalCatalog), PedalCatalog::ampItem or cabBlock. */
     BlockTile (int blockId, juce::AudioProcessorValueTreeState& state)
-        : block (blockId), tint (blockColour (blockId))
+        : block (blockId), apvts (state), tint (blockColour (blockId))
     {
         const bool isPedal = block != PedalCatalog::ampItem && block != cabBlock;
+
+        dot.setTint (tint);
+        dot.setSwitchable (isPedal);
+        dot.setToggleState (true, juce::dontSendNotification);
+        addAndMakeVisible (dot);
 
         if (isPedal)
         {
             title = Theme::titleCase (PedalCatalog::displayName (block));
-            bypass.setClickingTogglesState (true);
-            activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, PedalCatalog::onId (block), bypass);
+            activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, PedalCatalog::onId (block), dot);
             lastActive = isActive();
+            updateDetail();
         }
         else
         {
@@ -85,14 +135,18 @@ public:
             addChildComponent (removeButton);
         }
 
-        addMouseListener (this, true);   // hover over the remove button counts as hover over the tile
+        addMouseListener (this, true);   // hover over the dot or the remove button counts as hover over the tile
         setMouseCursor (block == cabBlock ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::DraggingHandCursor);
     }
 
     int getBlock() const { return block; }
     int getItem() const { return block; }
     juce::Colour getColour() const { return tint; }
-    bool isActive() const { return block == PedalCatalog::ampItem || block == cabBlock || bypass.getToggleState(); }
+    bool isActive() const { return block == PedalCatalog::ampItem || block == cabBlock || dot.getToggleState(); }
+
+    /** The bypass dot of a pedal tile (tests click it). */
+    juce::Button& getDot() { return dot; }
+    const juce::String& getDetail() const { return detail; }
 
     void setSelected (bool shouldBeSelected)
     {
@@ -102,6 +156,7 @@ public:
         repaint();
     }
 
+    /** The value line of the amp and the cab tile (a pedal tile reads its own first knob). */
     void setDetail (const juce::String& text)
     {
         if (detail == text)
@@ -113,9 +168,12 @@ public:
     std::function<void()> onRemove;
     std::function<void()> onClick;   // set for tiles that handle their own click (the cab)
 
-    /** Called from the UI timer so host automation of the bypass state is reflected too. */
+    /** Called from the UI timer so host automation of the bypass state and the knob is reflected too. */
     bool refresh()
     {
+        if (isPedalBlock())
+            updateDetail();
+
         const bool now = isActive();
         if (now == lastActive)
             return false;
@@ -131,43 +189,34 @@ public:
         const bool on = isActive();
 
         g.setColour (selected ? Theme::surfaceHi : hover ? Theme::surfaceHi.interpolatedWith (Theme::surface, 0.5f) : Theme::surface);
-        g.fillRoundedRectangle (r, 8.0f);
+        g.fillRoundedRectangle (r, 10.0f);
 
         if (selected)
         {
             // underline in the colour of the block
             g.setColour (tint);
-            g.fillRoundedRectangle (r.getX() + 12.0f, r.getBottom() - 3.0f, r.getWidth() - 24.0f, 2.0f, 1.0f);
-        }
-
-        // dot: lit = active, hollow ring = bypassed
-        auto dot = juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ r.getX() + 16.0f, r.getY() + 16.0f });
-        if (on)
-        {
-            g.setColour (tint);
-            g.fillEllipse (dot);
-        }
-        else
-        {
-            g.setColour (Theme::textLo);
-            g.drawEllipse (dot.reduced (0.75f), 1.5f);
+            g.fillRoundedRectangle (r.getX() + 16.0f, r.getBottom() - 4.0f, r.getWidth() - 32.0f, 2.0f, 1.0f);
         }
 
         g.setColour (on ? Theme::textHi : Theme::textMid);
-        g.setFont (Theme::ui (13.0f, true));
-        g.drawText (title, juce::Rectangle<float> (r.getX() + 12.0f, r.getY() + 26.0f, r.getWidth() - 24.0f, 18.0f),
+        g.setFont (Theme::ui (14.0f, true));
+        g.drawText (title, juce::Rectangle<float> (r.getX() + 14.0f, r.getY() + 42.0f, r.getWidth() - 28.0f, 20.0f),
                     juce::Justification::centredLeft, true);
 
         if (detail.isNotEmpty())
         {
-            g.setColour (Theme::textLo);
-            g.setFont (Theme::ui (11.0f));
-            g.drawText (detail, juce::Rectangle<float> (r.getX() + 12.0f, r.getY() + 43.0f, r.getWidth() - 24.0f, 14.0f),
+            g.setColour (on ? Theme::textMid : Theme::textLo);
+            g.setFont (Theme::ui (11.5f));
+            g.drawText (detail, juce::Rectangle<float> (r.getX() + 14.0f, r.getY() + 64.0f, r.getWidth() - 28.0f, 16.0f),
                         juce::Justification::centredLeft, true);
         }
     }
 
-    void resized() override { removeButton.setBounds (getWidth() - 26, 4, 22, 22); }
+    void resized() override
+    {
+        dot.setBounds (4, 4, 32, 32);
+        removeButton.setBounds (getWidth() - 30, 6, 24, 24);
+    }
 
     void mouseEnter (const juce::MouseEvent&) override { updateHover(); }
     void mouseExit  (const juce::MouseEvent&) override { updateHover(); }
@@ -179,6 +228,8 @@ public:
     }
 
 private:
+    bool isPedalBlock() const { return block != PedalCatalog::ampItem && block != cabBlock; }
+
     void updateHover()
     {
         const bool now = isMouseOver (true);
@@ -186,16 +237,32 @@ private:
             return;
 
         hover = now;
-        removeButton.setVisible (hover && PedalCatalog::isRemovable (block) && block != cabBlock && block != PedalCatalog::ampItem);
+        removeButton.setVisible (hover && PedalCatalog::isRemovable (block) && isPedalBlock());
         repaint();
     }
 
+    /** First knob of the pedal and its value, e.g. "Time 380 ms". */
+    void updateDetail()
+    {
+        const auto& knobs = PedalCatalog::pedalOf (block).knobs;
+        if (knobs.empty())
+            return;
+
+        const auto& k = knobs.front();
+        const auto* value = apvts.getRawParameterValue (PedalCatalog::knobId (block, 0));
+        if (value == nullptr)
+            return;
+
+        setDetail (Theme::titleCase (k.label) + " " + juce::String (value->load(), k.decimals) + k.suffix);
+    }
+
     int block;
+    juce::AudioProcessorValueTreeState& apvts;
     juce::Colour tint;
     juce::String title, detail;
     bool selected = false, hover = false, lastActive = true;
 
-    juce::ToggleButton bypass;   // not shown: follows the pedal's bypass parameter
+    TileDot dot;
     RemoveButton removeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> activeAttachment;
 };
@@ -731,19 +798,14 @@ private:
 };
 
 //==============================================================================
-/** The top of the Rig: the input meter, the chain of pedals and the amp, the "+" button, the fixed
-    cab block and the output meter. Clicking a block selects it (onSelect), the page below shows it. */
+/** The top of the Rig: the chain of pedals and the amp, the "+" button and the fixed cab block.
+    Clicking a block selects it (onSelect), the page below shows it. */
 class ChainBar : public juce::Component
 {
 public:
-    static constexpr int meterWidth = 32;
-
     explicit ChainBar (NeuralFlowAmpAudioProcessor& p)
-        : processor (p), apvts (p.apvts), inMeter ("In"), outMeter ("Out"), strip (p), cabTile (cabBlock, p.apvts)
+        : processor (p), apvts (p.apvts), strip (p), cabTile (cabBlock, p.apvts)
     {
-        addAndMakeVisible (inMeter);
-        addAndMakeVisible (outMeter);
-
         viewport.setViewedComponent (&strip, false);
         viewport.setScrollBarsShown (false, true);
         viewport.setScrollBarThickness (6);
@@ -776,7 +838,7 @@ public:
             onSelect (block);
     }
 
-    /** Called from the UI timer: reflects automation / state changes, feeds the meters. */
+    /** Called from the UI timer: reflects automation and state changes. */
     void refresh()
     {
         if (! strip.isDragging() && (currentMask() != shownMask || processor.getChainOrder() != shownOrder))
@@ -784,11 +846,6 @@ public:
 
         for (auto* p : strip.pedals)
             p->refresh();
-
-        const float inDb  = juce::Decibels::gainToDecibels (processor.inputPeak.exchange (0.0f),  -60.0f);
-        const float outDb = juce::Decibels::gainToDecibels (processor.outputPeak.exchange (0.0f), -60.0f);
-        inMeter.pushLevel (inDb);
-        outMeter.pushLevel (outDb);
 
         updateDetails();
     }
@@ -798,11 +855,10 @@ public:
         auto b = getLocalBounds();
         const int h = b.getHeight();
 
-        inMeter.setBounds (b.removeFromLeft (meterWidth).reduced (0, 14));
-        outMeter.setBounds (b.removeFromRight (meterWidth).reduced (0, 14));
-        b.reduce (16, 0);
-
-        cabTile.setBounds (b.removeFromRight (BlockTile::width).withSizeKeepingCentre (BlockTile::width, BlockTile::height));
+        // same row as the tiles of the strip (the strip leaves 8 px for its scroll bar)
+        cabTile.setBounds (juce::Rectangle<int> (b.getRight() - BlockTile::width, (h - 8 - BlockTile::height) / 2,
+                                                 BlockTile::width, BlockTile::height));
+        b.removeFromRight (BlockTile::width);
         b.removeFromRight (24);
         addButton.setBounds (b.removeFromRight (AddButton::size).withSizeKeepingCentre (AddButton::size, AddButton::size));
         b.removeFromRight (16);
@@ -813,10 +869,10 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        // the signal line runs behind everything, from the input to the output
+        // the signal line runs behind everything, from the first block to the cab
         const float y = (float) getHeight() * 0.5f - 4.0f;
         g.setColour (Theme::trackBg);
-        g.fillRect ((float) inMeter.getRight() + 6.0f, y - 0.75f, (float) (outMeter.getX() - inMeter.getRight() - 12), 1.5f);
+        g.fillRect ((float) viewport.getX(), y - 0.75f, (float) (cabTile.getX() - viewport.getX()), 1.5f);
     }
 
     ChainStrip& getStrip() { return strip; }
@@ -842,8 +898,6 @@ public:
                                                             parent);
         box.setArrowSize (10.0f);
     }
-
-    LevelMeter inMeter, outMeter;
 
 private:
     int currentMask() const
@@ -897,16 +951,24 @@ private:
         return false;
     }
 
-    /** The amp tile names the loaded NAM model, the cab tile the loaded IR. */
+    /** The amp tile shows "Drive 50" for the built-in amp and the model name for a NAM model, the cab
+        tile the loaded IR. */
     void updateDetails()
     {
         juce::String amp;
-        if (processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f
-            && processor.nam.getStatus().state == NamEngine::Status::State::ready)
-            amp = processor.nam.getModelInfo().name;
+        if (processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f)
+        {
+            amp = processor.nam.getStatus().state == NamEngine::Status::State::ready ? processor.nam.getModelInfo().name
+                                                                                    : juce::String ("No model");
+        }
+        else
+        {
+            amp = "Drive " + juce::String (processor.apvts.getRawParameterValue ("DRIVE")->load(), 0);
+        }
 
         strip.getAmpTile().setDetail (amp);
-        cabTile.setDetail (processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getFileNameWithoutExtension() : juce::String());
+        cabTile.setDetail (processor.loadedIrFile.existsAsFile() ? processor.loadedIrFile.getFileNameWithoutExtension()
+                                                                 : juce::String ("No IR"));
     }
 
     void setAdded (int item, bool added)

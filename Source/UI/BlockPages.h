@@ -259,10 +259,10 @@ public:
         high.attach   (apvts, "HIGH");
         master.attach (apvts, "MASTER");
 
-        drive.setMaxDiameter (200);
-        namIn.setMaxDiameter (200);
+        drive.setMaxDiameter (176);
+        namIn.setMaxDiameter (176);
         for (auto* k : { &low, &mid, &high, &master })
-            k->setMaxDiameter (112);
+            k->setMaxDiameter (104);
 
         for (auto* k : { &drive, &namIn, &low, &mid, &high, &master })
             addAndMakeVisible (k);
@@ -338,14 +338,14 @@ public:
             knob.setBounds (area.reduced (12, 0).withSizeKeepingCentre (area.getWidth() - 24, cellH));
         };
 
-        place (drive, driveSection, 200);
-        place (namIn, driveSection, 200);
+        place (drive, driveSection, 176);
+        place (namIn, driveSection, 176);
 
         const int cellW = eqSection.getWidth() / 3;
         for (auto* k : { &low, &mid, &high })
-            place (*k, eqSection.removeFromLeft (cellW), 112);
+            place (*k, eqSection.removeFromLeft (cellW), 104);
 
-        place (master, masterSection, 112);
+        place (master, masterSection, 104);
     }
 
     // exposed so tests can drive them
@@ -396,7 +396,7 @@ public:
             const auto& k = info.knobs[i];
             auto* knob = knobs.add (new LabeledKnob (Theme::titleCase (k.label), tint, k.decimals, k.suffix));
             knob->attach (state, PedalCatalog::knobId (item, (int) i));
-            knob->setMaxDiameter (140);
+            knob->setMaxDiameter (120);
             addAndMakeVisible (knob);
         }
     }
@@ -434,7 +434,7 @@ public:
             return;
 
         const int cellW = juce::jmin (180, b.getWidth() / n);
-        const int cellH = juce::jmin (b.getHeight(), 140 + 28);
+        const int cellH = juce::jmin (b.getHeight(), 120 + 28);
         auto row = b.withSizeKeepingCentre (cellW * n, cellH);
 
         for (auto* k : knobs)
@@ -475,8 +475,8 @@ public:
                                     return t.containsIgnoreCase ("k") || v < 100.0 ? v * 1000.0 : v;   // "12" means 12 kHz
                                 });
 
-        lowCut.setMaxDiameter (140);
-        highCut.setMaxDiameter (140);
+        lowCut.setMaxDiameter (120);
+        highCut.setMaxDiameter (120);
 
         addAndMakeVisible (irSlot);
         addAndMakeVisible (lowCut);
@@ -490,7 +490,7 @@ public:
         auto b = getLocalBounds();
         irSlot.setBounds (b.removeFromTop (IrSlot::height));
 
-        const int cellW = 200, cellH = juce::jmin (b.getHeight(), 140 + 28);
+        const int cellW = 200, cellH = juce::jmin (b.getHeight(), 120 + 28);
         auto row = b.withSizeKeepingCentre (cellW * 2, cellH);
         lowCut.setBounds (row.removeFromLeft (cellW));
         highCut.setBounds (row);
