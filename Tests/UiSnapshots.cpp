@@ -435,10 +435,9 @@ void renderUiSnapshots (const juce::File& dir)
         report (chainBar->getCabTile().getDetail().isNotEmpty(), "the cab tile shows its IR line: " + chainBar->getCabTile().getDetail());
         report (chainBar->getHeight() == 176 && BlockTile::width == 132 && BlockTile::height == 104, "the chain strip uses big tiles");
 
-        // footer: meters and the audio device live here, not in the header
+        // footer: the meters and the Tuner live here
         if (auto* footer = findFirst<Footer> (*editor))
         {
-            report (footer->getAudioInfo().contains ("kHz"), "the footer shows the audio device: " + footer->getAudioInfo());
             report (footer->getHeight() == Footer::height && footer->getBottom() <= Theme::designHeight, "the footer sits at the bottom");
             report (footer->inMeter.getX() < footer->getTunerButton().getX() && footer->outMeter.getX() > footer->getTunerButton().getX(),
                     "In is on the left, Out on the right, Tuner in the middle");
@@ -2005,6 +2004,7 @@ void renderUiSnapshots (const juce::File& dir)
         report (! view->getChain().isVisible() && blocks2.getY() == view->getChain().getY(),
                 "...and the page also takes the chain strip's place (full window)");
         report (settings != nullptr && ! settings->hasAudioSelector(), "inside a plugin the host owns the audio device: no device selector");
+        report (settings != nullptr && settings->getAudioInfo().contains ("kHz"), "the Settings page shows the audio device: " + (settings != nullptr ? settings->getAudioInfo() : juce::String()));
         save (*editor, dir.getChildFile ("ui_settings_plugin.png"));
 
         if (settings != nullptr)

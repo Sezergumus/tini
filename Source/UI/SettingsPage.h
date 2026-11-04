@@ -3,12 +3,13 @@
 #include "../PluginProcessor.h"
 #include "../StandaloneHooks.h"
 #include "Theme.h"
+#include "AudioInfo.h"
 
 //==============================================================================
 /** The Settings page (the gear in the header): audio device in the standalone, the tuner's reference
     pitch, and the version. It fills the whole area between the header and the footer (the chain strip
     is hidden meanwhile) until Done or the gear closes it. */
-class SettingsPage : public juce::Component
+class SettingsPage : public juce::Component, private juce::Timer
 {
 public:
     explicit SettingsPage (TiniAudioProcessor& p) : processor (p)
@@ -43,12 +44,17 @@ public:
         doneButton.getProperties().set ("primary", true);
         doneButton.onClick = [this] { if (onClose) onClose(); };
         addAndMakeVisible (doneButton);
+
+        updateAudioInfo();
+        startTimerHz (1);
     }
 
     /** Called when the Done button was pressed; MainView closes the page. */
     std::function<void()> onClose;
 
     juce::TextButton& getDoneButton() { return doneButton; }
+
+    const juce::String& getAudioInfo() const { return audioInfo; }
 
     bool hasAudioSelector() const { return audioSelector != nullptr; }
     juce::Slider& getReferenceSlider() { return referenceSlider; }
@@ -67,6 +73,9 @@ public:
         };
 
         heading ("Audio", audioHeading);
+        g.setColour (Theme::textLo);
+        g.setFont (Theme::ui (12.0f));
+        g.drawText (audioInfo, audioInfoArea, juce::Justification::centredLeft, true);
         if (audioSelector == nullptr)
         {
             g.setColour (Theme::textLo);
@@ -105,7 +114,8 @@ public:
         auto right = b.withTrimmedLeft (40);
 
         audioHeading = left.removeFromTop (24);
-        left.removeFromTop (6);
+        audioInfoArea = left.removeFromTop (20);
+        left.removeFromTop (8);
         if (audioSelector == nullptr)
         {
             audioNote = left.removeFromTop (40);
@@ -129,13 +139,26 @@ public:
     }
 
 private:
+    void timerCallback() override { updateAudioInfo(); }
+
+    void updateAudioInfo()
+    {
+        const auto text = AudioInfo::describe (processor);
+        if (text != audioInfo)
+        {
+            audioInfo = text;
+            repaint();
+        }
+    }
+
     TiniAudioProcessor& processor;
+    juce::String audioInfo;
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSelector;
     juce::Viewport audioViewport;
     juce::Slider referenceSlider;
     juce::TextButton doneButton;
 
-    juce::Rectangle<int> titleArea, audioHeading, audioNote, tunerHeading, referenceLabel, aboutHeading;
+    juce::Rectangle<int> titleArea, audioHeading, audioInfoArea, audioNote, tunerHeading, referenceLabel, aboutHeading;
     std::array<juce::Rectangle<int>, 5> aboutLines;
     int dividerX = 0;
 

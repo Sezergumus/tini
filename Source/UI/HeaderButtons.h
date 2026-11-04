@@ -72,7 +72,7 @@ public:
             g.fillRoundedRectangle (r, 6.0f);
         }
 
-        Icons::draw (g, Icons::sliders(), juce::Rectangle<float> (18.0f, 18.0f).withCentre (r.getCentre()),
+        Icons::draw (g, Icons::gear(), juce::Rectangle<float> (20.0f, 20.0f).withCentre (r.getCentre()),
                      getToggleState() ? Theme::accent : highlighted ? Theme::textHi : Theme::textMid, 1.6f);
     }
 };

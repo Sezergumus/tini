@@ -142,20 +142,25 @@ namespace Icons
     }
 
     //==========================================================================
-    /** Three sliders: the Settings button. */
-    inline Glyph sliders()
+    /** A soft gear: eight teeth with rounded tops and shoulders (the outline is one smooth curve), a round hole. */
+    inline Glyph gear()
     {
         Glyph g;
-        const float ys[] = { 0.22f, 0.5f, 0.78f };
-        const float xs[] = { 0.66f, 0.3f, 0.56f };
-        const float r = 0.12f;
+        constexpr int teeth = 8, steps = 240;
+        constexpr float inner = 0.33f, outer = 0.45f;
+        auto smooth = [] (float a, float b, float x) { const float t = juce::jlimit (0.0f, 1.0f, (x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); };
 
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < steps; ++i)
         {
-            detail::poly (g.line, { { 0.06f, ys[i] }, { xs[i] - r, ys[i] } });
-            detail::poly (g.line, { { xs[i] + r, ys[i] }, { 0.94f, ys[i] } });
-            detail::circle (g.line, xs[i], ys[i], r);
+            const float angle = juce::MathConstants<float>::twoPi * (float) i / (float) steps;
+            const float x = std::fmod ((float) i * (float) teeth / (float) steps, 1.0f);
+            const float tooth = smooth (0.04f, 0.3f, x) * (1.0f - smooth (0.5f, 0.76f, x));
+            const float r = inner + (outer - inner) * tooth;
+            const juce::Point<float> pt (0.5f + std::cos (angle) * r, 0.5f + std::sin (angle) * r);
+            if (i == 0) g.line.startNewSubPath (pt); else g.line.lineTo (pt);
         }
+        g.line.closeSubPath();
+        detail::circle (g.line, 0.5f, 0.5f, 0.135f);
         return g;
     }
 
