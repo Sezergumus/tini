@@ -104,7 +104,7 @@ namespace
             hooks.isMaximised    = [this] { return mainWindow != nullptr && mainWindow->isFitted(); };
             hooks.deviceManager  = [this]() -> juce::AudioDeviceManager* { return mainWindow != nullptr ? &mainWindow->getDeviceManager() : nullptr; };
 
-            mainWindow = std::make_unique<TiniWindow> (getApplicationName(), juce::Colour (0xff0f1113),
+            mainWindow = std::make_unique<TiniWindow> (windowTitle, juce::Colour (0xff0f1113),
                                                        appProperties.getUserSettings(), config);
 
             mainWindow->setVisible (true);
@@ -140,6 +140,11 @@ namespace
         juce::ApplicationProperties appProperties;
         std::unique_ptr<TiniWindow> mainWindow;
         const juce::String appName { juce::CharPointer_UTF8 (JucePlugin_Name) };
+
+        // The taskbar shows the window title, so it carries the real name. It is written as UTF-8
+        // bytes in the source (not taken from the JucePlugin_Name macro, which has to stay ASCII, see
+        // CMakeLists.txt). appName stays "Tini": it names the settings file, which must not move.
+        const juce::String windowTitle { juce::CharPointer_UTF8 ("t\xc4\xb1n\xc4\xb1") };
     };
 }
 
