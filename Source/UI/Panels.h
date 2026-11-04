@@ -424,7 +424,6 @@ public:
     void layoutItems (int height, bool animate = false)
     {
         stripHeight = height;
-        gaps.clear();
         targets.assign (items.size(), {});
 
         const int gap = 24;
@@ -434,10 +433,7 @@ public:
         for (size_t i = 0; i < items.size(); ++i)
         {
             if (i > 0)
-            {
-                gaps.push_back ({ x, x + gap });
                 x += gap;
-            }
             targets[i] = { x, y, BlockTile::width, BlockTile::height };
             x += BlockTile::width;
         }
@@ -576,20 +572,6 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        const float y = (float) stripHeight * 0.5f;
-
-        for (const auto& gap : gaps)
-        {
-            const float cx = (float) (gap.first + gap.second) * 0.5f;
-
-            juce::Path chevron;
-            chevron.startNewSubPath (cx - 2.5f, y - 4.5f);
-            chevron.lineTo (cx + 2.5f, y);
-            chevron.lineTo (cx - 2.5f, y + 4.5f);
-            g.setColour (Theme::textLo);
-            g.strokePath (chevron, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-
         if (dragging && juce::isPositiveAndBelow (dragIndex, (int) items.size()))
         {
             // where the item will land
@@ -674,7 +656,6 @@ private:
 
     std::vector<Item> items;
     std::vector<juce::Rectangle<int>> targets;
-    std::vector<std::pair<int, int>> gaps;
     int stripHeight = 0, itemsRight = 0, selectedBlock = PedalCatalog::ampItem, pressedItem = -1;
 
     bool armed = false, dragging = false;
