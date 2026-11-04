@@ -1621,6 +1621,46 @@ void renderUiSnapshots (const juce::File& dir)
                     FileLibrary::useTrash() = old;
                 }
 
+                // a pack can be renamed: its folder moves, the files keep their names, users of a file are told
+                {
+                    const int baseline = list.getNumFiles();
+                    const auto src1 = outside.getChildFile ("Ren One.nam"), src2 = outside.getChildFile ("Ren Two.nam");
+                    testModels.getChildFile ("test_wavenet.nam").copyFileTo (src1);
+                    testModels.getChildFile ("test_a2.nam").copyFileTo (src2);
+                    FileLibrary::importFile (src1, Kind::pedals, "Rename Me");
+                    FileLibrary::importFile (src2, Kind::pedals, "Taken Name");
+                    FileLibrary::importFile (src1, Kind::pedals, "Rename Me", true);
+                    list.rescan();
+
+                    const auto pageOnRenamed = list.onRenamed;
+                    std::vector<std::pair<juce::File, juce::File>> renames;
+                    list.onRenamed = [&renames] (const juce::File& a, const juce::File& b) { renames.emplace_back (a, b); };
+
+                    report (list.renamePack ("Rename Me", "  ").failed(), "a pack needs a name");
+                    report (list.renamePack ("Rename Me", "Taken Name").failed()
+                                && pedalsFolder.getChildFile ("Rename Me").isDirectory(),
+                            "a pack cannot take the name of another one");
+                    const auto renamedResult = list.renamePack ("Rename Me", "Renamed Pack");
+                    report (renamedResult.wasOk()
+                                && pedalsFolder.getChildFile ("Renamed Pack").isDirectory()
+                                && ! pedalsFolder.getChildFile ("Rename Me").exists()
+                                && list.getNumFiles() == baseline + 3,
+                            "renaming a pack moves its folder and keeps its files " + renamedResult.getErrorMessage()
+                                + " (" + juce::String (list.getNumFiles() - baseline) + " files)");
+                    report (renames.size() == 2 && renames[0].second.isAChildOf (pedalsFolder.getChildFile ("Renamed Pack"))
+                                && renames[0].second.getFileName() == renames[0].first.getFileName(),
+                            "...and tells the users of the files where they went");
+
+                    list.onRenamed = pageOnRenamed;
+
+                    const auto old = FileLibrary::useTrash();
+                    FileLibrary::useTrash() = false;
+                    list.deletePack ("Renamed Pack");
+                    list.deletePack ("Taken Name");
+                    FileLibrary::useTrash() = old;
+                    report (list.getNumFiles() == baseline, "the renamed pack can be deleted again");
+                }
+
                 // Tidy up works in the background and shows it
                 libPage.askTidy();
                 report (libPage.isBusy(), "Tidy up shows that it is working");

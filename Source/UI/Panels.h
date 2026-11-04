@@ -4,6 +4,7 @@
 #include "../PedalCatalog.h"
 #include "Theme.h"
 #include "Widgets.h"
+#include "Icons.h"
 
 //==============================================================================
 /** The Cab is a block of the Rig like the amp and the pedals, but it is not part of the chain order:
@@ -760,13 +761,10 @@ public:
         }
 
         // an iOS settings-style icon: a rounded square in the category colour
-        const auto icon = juce::Rectangle<float> (26.0f, 26.0f).withCentre ({ r.getX() + 21.0f, r.getCentreY() });
-        g.setGradientFill (Theme::fillGradient (tint.withMultipliedAlpha (alpha), icon));
-        g.fillRoundedRectangle (icon, 7.0f);
-        g.setColour (juce::Colours::white.withAlpha (0.9f * alpha));
-        g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (icon.getCentre()));
+        const auto icon = juce::Rectangle<float> (30.0f, 30.0f).withCentre ({ r.getX() + 21.0f, r.getCentreY() });
+        Icons::drawBadge (g, Icons::pedal (info.name), icon, tint, alpha);
 
-        const float textX = r.getX() + 44.0f;
+        const float textX = r.getX() + 48.0f;
         const float textW = r.getWidth() - textX - 90.0f;
 
         g.setColour (Theme::textHi.withAlpha (alpha));

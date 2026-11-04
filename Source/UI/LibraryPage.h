@@ -53,16 +53,22 @@ public:
             g.fillRoundedRectangle (r, 10.0f);
         }
 
-        const auto icon = juce::Rectangle<float> (22.0f, 22.0f).withCentre ({ r.getX() + 23.0f, r.getCentreY() });
+        const auto icon = juce::Rectangle<float> (28.0f, 28.0f).withCentre ({ r.getX() + 25.0f, r.getCentreY() });
+        const auto glyph = name == "Amps" ? Icons::amp() : name == "Pedals" ? Icons::stompbox()
+                         : name == "Cabs" ? Icons::cab() : Icons::other();
         if (open)
-            g.setColour (juce::Colours::white.withAlpha (0.25f));
+        {
+            // on the filled row the badge is a lighter square of the same colour
+            g.setColour (juce::Colours::white.withAlpha (0.22f));
+            g.fillRoundedRectangle (icon, icon.getWidth() * 0.27f);
+            Icons::draw (g, glyph, icon.reduced (icon.getWidth() * 0.2f), juce::Colours::white, 1.8f);
+        }
         else
-            g.setGradientFill (Theme::fillGradient (colour, icon));
-        g.fillRoundedRectangle (icon, 6.0f);
-        g.setColour (juce::Colours::white);
-        g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (icon.getCentre()));
+        {
+            Icons::drawBadge (g, glyph, icon, colour);
+        }
 
-        auto text = r.withTrimmedLeft (44.0f).withTrimmedRight (14.0f);
+        auto text = r.withTrimmedLeft (50.0f).withTrimmedRight (14.0f);
         g.setColour (open ? juce::Colours::white : Theme::textHi);
         g.setFont (Theme::ui (14.0f, open));
         g.drawText (getButtonText(), text, juce::Justification::centredLeft, false);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Theme.h"
+#include "Icons.h"
 
 //==============================================================================
 /** A page tab in the header ("Rig", "Library"): flat text, the open page is bright with a line under it.
@@ -71,16 +72,8 @@ public:
             g.fillRoundedRectangle (r, 6.0f);
         }
 
-        const auto c = r.getCentre();
-        const float outer = 9.0f, inner = 6.8f;
-
-        juce::Path gear;
-        gear.setUsingNonZeroWinding (false);   // the hole is cut out by the even-odd rule
-        gear.addStar (c, 8, inner, outer, juce::MathConstants<float>::pi / 8.0f);
-        gear.addEllipse (c.x - 2.7f, c.y - 2.7f, 5.4f, 5.4f);     // axle hole
-
-        g.setColour (getToggleState() ? Theme::accent : highlighted ? Theme::textHi : Theme::textMid);
-        g.fillPath (gear);
+        Icons::draw (g, Icons::sliders(), juce::Rectangle<float> (18.0f, 18.0f).withCentre (r.getCentre()),
+                     getToggleState() ? Theme::accent : highlighted ? Theme::textHi : Theme::textMid, 1.6f);
     }
 };
 

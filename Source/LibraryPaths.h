@@ -234,6 +234,43 @@ namespace FileLibrary
         return source.copyFileTo (target) ? target : juce::File();
     }
 
+    /** Renames the pack folder `pack` of `kind` to `newName`. Refuses empty names, a name that is only a path
+        piece and names of packs that exist. `renamedPack` is the pack name as it is on disk afterwards. */
+    inline juce::Result renamePack (Kind kind, const juce::String& pack, const juce::String& newName, juce::String& renamedPack)
+    {
+        const auto name = legalPackName (newName);
+        if (name.isEmpty())
+            return juce::Result::fail ("Type a name.");
+
+        const auto from = packFolder (kind, pack);
+        const auto to = libraryFolder (kind).getChildFile (name);
+
+        if (pack.isEmpty() || ! from.isDirectory())
+            return juce::Result::fail ("The pack is not there any more.");
+
+        renamedPack = name;
+        if (to == from)
+            return juce::Result::ok();
+
+        // a name that differs only in upper / lower case is the same folder on Windows: that is a rename
+        if (to.exists() && ! from.getFullPathName().equalsIgnoreCase (to.getFullPathName()))
+            return juce::Result::fail ("A pack with that name already exists.");
+
+        // Windows refuses to move a folder while a file in it is open; the background read of a model's
+        // details has one open for a moment, so try again briefly before giving up
+        bool moved = from.moveFileTo (to);
+        for (int attempt = 0; ! moved && attempt < 15; ++attempt)
+        {
+            juce::Thread::sleep (40);
+            moved = from.moveFileTo (to);
+        }
+
+        if (! moved)
+            return juce::Result::fail ("The pack could not be renamed (a file in it may be open in another program).");
+
+        return juce::Result::ok();
+    }
+
     /** Deletes a pack folder that has nothing left in it (never the library folders themselves). */
     inline void removeIfEmpty (const juce::File& folder)
     {

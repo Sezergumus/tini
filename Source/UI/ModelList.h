@@ -497,6 +497,54 @@ public:
         return (int) moved.size();
     }
 
+    /** Renames a pack (its folder). The files inside keep their names; a model that is in use follows to its new
+        place through onRenamed, like a renamed file does. */
+    juce::Result renamePack (const juce::String& pack, const juce::String& newName)
+    {
+        juce::Array<juce::File> members;
+        for (const auto& file : all)
+            if (FileLibrary::packOf (file, kind) == pack)
+                members.add (file);
+
+        const auto oldFolder = FileLibrary::packFolder (kind, pack);
+
+        juce::String renamedPack;
+        const auto result = FileLibrary::renamePack (kind, pack, newName, renamedPack);
+        if (result.failed() || renamedPack == pack)
+            return result;
+
+        const auto newFolder = FileLibrary::packFolder (kind, renamedPack);
+        auto moved = [&] (const juce::File& f) { return newFolder.getChildFile (f.getRelativePathFrom (oldFolder)); };
+
+        if (selected != juce::File() && selected.isAChildOf (oldFolder))
+            selected = moved (selected);
+
+        if (openPacks.erase (pack) > 0)
+            openPacks.insert (renamedPack);
+
+        rescan();
+
+        for (const auto& file : members)
+            if (onRenamed)
+                onRenamed (file, moved (file));
+
+        if (onMovedAll)
+            onMovedAll();
+
+        return result;
+    }
+
+    void askRenamePack (const juce::String& pack)
+    {
+        auto dialog = std::make_unique<FormDialog> ("Rename pack", "The folder of the pack and the pack line change; the files in it keep their names.", "Rename");
+        dialog->addText ("name", "Name", pack);
+        dialog->onSubmit = [safe = juce::Component::SafePointer<ModelList> (this), pack] (FormDialog& d)
+        {
+            return safe != nullptr ? safe->renamePack (pack, d.getText ("name")) : juce::Result::ok();
+        };
+        FormDialog::show (std::move (dialog), this);
+    }
+
     /** Moves every file of a pack to the Recycle Bin. Returns how many could not be removed (in use or protected). */
     int deletePack (const juce::String& pack)
     {
@@ -559,14 +607,16 @@ public:
     /** The right click menu of a pack line. */
     void showPackMenu (const juce::String& pack)
     {
-        if (kind == FileLibrary::Kind::cabs)
-            return;
-
         juce::PopupMenu menu;
+        menu.addItem (2, "Rename pack...");
 
-        for (auto k : { FileLibrary::Kind::amps, FileLibrary::Kind::pedals, FileLibrary::Kind::other })
-            if (k != kind)
-                menu.addItem (10 + (int) k, "Move the whole pack to " + FileLibrary::folderName (k));
+        if (kind != FileLibrary::Kind::cabs)
+        {
+            menu.addSeparator();
+            for (auto k : { FileLibrary::Kind::amps, FileLibrary::Kind::pedals, FileLibrary::Kind::other })
+                if (k != kind)
+                    menu.addItem (10 + (int) k, "Move the whole pack to " + FileLibrary::folderName (k));
+        }
 
         menu.addSeparator();
         menu.addItem (3, "Show in file manager");
@@ -579,7 +629,9 @@ public:
             if (safe == nullptr || choice == 0)
                 return;
 
-            if (choice == 3)
+            if (choice == 2)
+                safe->askRenamePack (pack);
+            else if (choice == 3)
                 FileLibrary::packFolder (safe->kind, pack).revealToUser();
             else if (choice == 4)
                 safe->askDeletePack (pack);
