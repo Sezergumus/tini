@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Theme.h"
+#include "Icons.h"
 
 //==============================================================================
 /** The line under a knob. Shows the knob's name, and its value while the knob is hovered or
@@ -219,6 +220,41 @@ public:
 
 private:
     bool right;
+};
+
+//==============================================================================
+/** A flat icon button (search, add, open folder, more, hide the list): the glyph alone, a soft
+    background while hovered, the accent colour while its toggle state is on. */
+class IconButton : public juce::Button
+{
+public:
+    static constexpr int size = 28;
+
+    IconButton (const juce::String& name, Icons::Glyph icon, const juce::String& tooltip)
+        : juce::Button (name), glyph (std::move (icon))
+    {
+        setTooltip (tooltip);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto r = getLocalBounds().toFloat();
+
+        if ((highlighted || down) && isEnabled())
+        {
+            g.setColour (juce::Colours::white.withAlpha (down ? 0.12f : 0.07f));
+            g.fillRoundedRectangle (r, 6.0f);
+        }
+
+        const auto colour = ! isEnabled() ? Theme::textLo
+                          : getToggleState() ? Theme::accent
+                          : highlighted ? Theme::textHi : Theme::textMid;
+        Icons::draw (g, glyph, juce::Rectangle<float> (16.0f, 16.0f).withCentre (r.getCentre()), colour, 1.5f);
+    }
+
+private:
+    Icons::Glyph glyph;
 };
 
 //==============================================================================

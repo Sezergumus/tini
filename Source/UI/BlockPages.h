@@ -16,70 +16,191 @@ struct ModelTarget
     std::function<void (const juce::File&)> load;
     std::function<void()> unload;
     FileLibrary::Kind kind = FileLibrary::Kind::amps;   // which library folder it browses
-    juce::String levelParam;                            // "Level match" switch; empty = none
     juce::String emptyHint = "Load a .nam file to use it as the amp";
 };
 
-/** One line that shows a Neural Amp Modeler model: its name, a short detail line (training rate,
-    loudness, loading or error state) and the buttons to load, clear and level-match it.
-    Works for any slot that holds a NAM model (see ModelTarget). */
-class ModelSlot : public juce::Component
+//==============================================================================
+/** The strip of what is loaded in a slot: a name, a short detail line, the arrows to the previous / next
+    file of the list, and a "more" menu (load from a file anywhere, show in the file manager, clear).
+    Picking is the list's job (FileBrowserList, next to the slot); while the list is hidden the strip
+    shows a Browse button that brings it back. ModelSlot and IrSlot share this. */
+class SlotStrip : public juce::Component
 {
 public:
     static constexpr int height = 52;
 
+    SlotStrip (const juce::String& prevName, const juce::String& nextName, const juce::String& what)
+        : prevButton (false, prevName), nextButton (true, nextName)
+    {
+        prevButton.setTooltip ("Previous " + what + " in the list");
+        nextButton.setTooltip ("Next " + what + " in the list");
+        prevButton.onClick = [this] { step (-1); };
+        nextButton.onClick = [this] { step (+1); };
+        moreButton.onClick = [this] { showMoreMenu(); };
+
+        browseButton.setButtonText ("Browse");
+        browseButton.setTooltip ("Show the list");
+        browseButton.onClick = [this] { setBrowseOpen (true); };
+
+        for (auto* b : std::initializer_list<juce::Component*> { &prevButton, &nextButton, &moreButton })
+            addAndMakeVisible (b);
+        addChildComponent (browseButton);
+    }
+
+    /** Called when the list was shown or hidden. */
+    std::function<void()> onBrowseToggled;
+    bool isBrowseOpen() const { return browseOpen; }
+
+    void setBrowseOpen (bool open)
+    {
+        if (open == browseOpen)
+            return;
+
+        browseOpen = open;
+        browseButton.setVisible (! open);
+        resized();
+        repaint();
+
+        if (onBrowseToggled)
+            onBrowseToggled();
+    }
+
+    /** How the arrows find the file before / after the loaded one: the page hands in its list's order
+        (FileBrowserList::neighbourOf). Without it they step through the file's folder. */
+    std::function<juce::File (const juce::File&, int)> neighbour;
+
+    void paint (juce::Graphics& g) override
+    {
+        Theme::drawInset (g, getLocalBounds().toFloat(), 8.0f);
+
+        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (buttonsWidth() + 12);
+        auto top = text.removeFromTop (text.getHeight() / 2);
+
+        g.setColour (nameIsDim ? Theme::textMid : Theme::textHi);
+        g.setFont (Theme::ui (13.0f, true));
+        g.drawText (name, top, juce::Justification::centredLeft, true);
+
+        g.setColour (detailIsError ? Theme::danger : Theme::textLo);
+        g.setFont (Theme::ui (11.5f));
+        g.drawText (detail, text, juce::Justification::centredLeft, true);
+    }
+
+    void resized() override
+    {
+        auto buttons = getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30);
+
+        if (! browseOpen)
+        {
+            browseButton.setBounds (buttons.removeFromRight (browseWidth));
+            buttons.removeFromRight (8);
+        }
+
+        moreButton.setBounds (buttons.removeFromRight (IconButton::size).withSizeKeepingCentre (IconButton::size, IconButton::size));
+        buttons.removeFromRight (4);
+        nextButton.setBounds (buttons.removeFromRight (28));
+        prevButton.setBounds (buttons.removeFromRight (28));
+    }
+
+    // exposed so tests can drive them
+    StepButton prevButton, nextButton;
+    IconButton moreButton { "slot_more", Icons::more(), "More" };
+    juce::TextButton browseButton;
+
+protected:
+    /** The file shown in the strip (the arrows step from it). */
+    virtual juce::File currentFile() const = 0;
+    virtual void loadFile (const juce::File& file) = 0;
+    /** Opens the file dialog for a file from anywhere. */
+    virtual void chooseFile() = 0;
+    /** Takes the file out of the slot; `label` is what the menu calls that. */
+    virtual void clearSlot() = 0;
+    virtual juce::String clearLabel() const = 0;
+    virtual bool canClear() const = 0;
+
+    void setText (const juce::String& newName, const juce::String& newDetail, bool dim, bool error)
+    {
+        if (newName == name && newDetail == detail && dim == nameIsDim && error == detailIsError)
+            return;
+
+        name = newName;
+        detail = newDetail;
+        nameIsDim = dim;
+        detailIsError = error;
+        repaint();
+    }
+
+private:
+    static constexpr int browseWidth = 72;
+
+    int buttonsWidth() const
+    {
+        return 2 * 28 + 4 + IconButton::size + (browseOpen ? 0 : browseWidth + 8);
+    }
+
+    void step (int delta)
+    {
+        const auto from = currentFile();
+        const auto file = neighbour ? neighbour (from, delta) : juce::File();
+        if (file.existsAsFile() && file != from)
+            loadFile (file);
+    }
+
+    void showMoreMenu()
+    {
+        const auto file = currentFile();
+
+        juce::PopupMenu menu;
+        menu.addItem (1, "Load from file...");
+        menu.addItem (2, "Show in file manager", file.existsAsFile());
+        menu.addSeparator();
+        menu.addItem (3, clearLabel(), canClear());
+        Theme::styleMenu (menu, *this);
+
+        menu.showMenuAsync (Theme::menuBelow (moreButton),
+                            [safe = juce::Component::SafePointer<SlotStrip> (this), file] (int choice)
+        {
+            if (safe == nullptr)
+                return;
+
+            switch (choice)
+            {
+                case 1: safe->chooseFile(); break;
+                case 2: file.revealToUser(); break;
+                case 3: safe->clearSlot(); break;
+                default: break;
+            }
+        });
+    }
+
+    juce::String name, detail;
+    bool nameIsDim = true, detailIsError = false, browseOpen = true;
+};
+
+//==============================================================================
+/** The strip of a Neural Amp Modeler model: its name and a short detail line (training rate, loudness,
+    loading or error state). Works for any slot that holds a NAM model (see ModelTarget). */
+class ModelSlot : public SlotStrip
+{
+public:
     /** The amp slot of the processor. */
     explicit ModelSlot (TiniAudioProcessor& p)
         : ModelSlot (p, ModelTarget { p.nam,
                                       [&p] (const juce::File& f) { p.loadNamModel (f); },
                                       [&p] { p.unloadNamModel(); },
-                                      FileLibrary::Kind::amps, "NAM_NORM",
+                                      FileLibrary::Kind::amps,
                                       "Load a .nam file to use it as the amp" })
     {
     }
 
-    ModelSlot (TiniAudioProcessor& p, ModelTarget modelTarget)
-        : processor (p), target (std::move (modelTarget))
+    ModelSlot (TiniAudioProcessor&, ModelTarget modelTarget)
+        : SlotStrip ("model_prev", "model_next", "model"), target (std::move (modelTarget))
     {
-        loadButton.setButtonText ("Load model");
-        loadButton.onClick = [this] { chooseFile(); };
-
-        clearButton.setButtonText ("Clear");
-        clearButton.onClick = [this] { target.unload(); refresh(); };
-
-        levelButton.setButtonText ("Level match");
-        levelButton.setTooltip ("Level every model to the same loudness (-18 dB)");
-        levelButton.setClickingTogglesState (true);
-        if (target.levelParam.isNotEmpty())
-            levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, target.levelParam, levelButton);
-        levelButton.setVisible (target.levelParam.isNotEmpty());
-
-        prevButton.setTooltip ("Previous model in this folder");
-        nextButton.setTooltip ("Next model in this folder");
-        prevButton.onClick = [this] { step (-1); };
-        nextButton.onClick = [this] { step (+1); };
-
-        browseButton.setButtonText ("Browse");
-        browseButton.setTooltip ("Show the models in this folder");
-        browseButton.setClickingTogglesState (true);
-        browseButton.setToggleState (true, juce::dontSendNotification);
-        browseButton.onClick = [this] { if (onBrowseToggled) onBrowseToggled(); };
-
-        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &clearButton, &browseButton, &prevButton, &nextButton })
-            addAndMakeVisible (b);
-
-        if (target.levelParam.isNotEmpty())
-            addAndMakeVisible (levelButton);
-
+        neighbour = [kind = target.kind] (const juce::File& f, int delta) { return FileLibrary::neighbour (f, kind, delta); };
         refresh();
     }
 
-    /** Called when the Browse button was switched. */
-    std::function<void()> onBrowseToggled;
-    bool isBrowseOpen() const { return browseButton.getToggleState(); }
-
     /** Loads a model file (from the dialog, the arrows or the browser list). */
-    void loadFile (const juce::File& file)
+    void loadFile (const juce::File& file) override
     {
         if (! file.existsAsFile())
             return;
@@ -92,6 +213,13 @@ public:
 
     /** Called when the user picked a model file and it started loading. */
     std::function<void()> onModelPicked;
+
+    /** Takes the model out (the "Clear" of the more menu). */
+    void clear()
+    {
+        target.unload();
+        refresh();
+    }
 
     /** Called from the UI timer: follows the model's loading state. */
     void refresh()
@@ -118,73 +246,16 @@ public:
             }
         }
 
-        const bool failed = status.state == State::failed;
-        clearButton.setEnabled (status.state != State::empty);
-
-        if (name == modelName && detail == modelDetail && failed == shownFailed)
-            return;
-
-        modelName = name;
-        modelDetail = detail;
-        shownFailed = failed;
-        hasModel = status.state != State::empty;
-        repaint();
+        setText (name, detail, status.state == State::empty, status.state == State::failed);
     }
 
-    void paint (juce::Graphics& g) override
-    {
-        Theme::drawInset (g, getLocalBounds().toFloat(), 8.0f);
+protected:
+    juce::File currentFile() const override { return target.engine.getFile(); }
+    void clearSlot() override               { clear(); }
+    juce::String clearLabel() const override { return "Clear"; }
+    bool canClear() const override          { return target.engine.getStatus().state != NamEngine::Status::State::empty; }
 
-        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (buttonsWidth() + 12);
-        auto top = text.removeFromTop (text.getHeight() / 2);
-
-        g.setColour (hasModel ? Theme::textHi : Theme::textMid);
-        g.setFont (Theme::ui (13.0f, true));
-        g.drawText (modelName, top, juce::Justification::centredLeft, true);
-
-        g.setColour (shownFailed ? Theme::danger : Theme::textLo);
-        g.setFont (Theme::ui (11.5f));
-        g.drawText (modelDetail, text, juce::Justification::centredLeft, true);
-    }
-
-    void resized() override
-    {
-        auto buttons = getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30);
-        clearButton.setBounds (buttons.removeFromRight (64));
-        buttons.removeFromRight (6);
-        if (levelButton.isVisible())
-        {
-            levelButton.setBounds (buttons.removeFromRight (96));
-            buttons.removeFromRight (6);
-        }
-        loadButton.setBounds (buttons.removeFromRight (100));
-        buttons.removeFromRight (6);
-        browseButton.setBounds (buttons.removeFromRight (72));
-        buttons.removeFromRight (6);
-        nextButton.setBounds (buttons.removeFromRight (28));
-        prevButton.setBounds (buttons.removeFromRight (28));
-    }
-
-    // exposed so tests can drive them
-    juce::TextButton loadButton, clearButton, levelButton, browseButton;
-    StepButton prevButton { false, "model_prev" }, nextButton { true, "model_next" };
-
-private:
-    int buttonsWidth() const
-    {
-        const bool level = target.levelParam.isNotEmpty();
-        return 100 + (level ? 96 : 0) + 64 + 72 + 56 + (level ? 5 : 4) * 6 + 12;
-    }
-
-    /** The model before / after the loaded one in its folder. */
-    void step (int delta)
-    {
-        const auto file = FileLibrary::neighbour (target.engine.getFile(), target.kind, delta);
-        if (file.existsAsFile() && file != target.engine.getFile())
-            loadFile (file);
-    }
-
-    void chooseFile()
+    void chooseFile() override
     {
         const auto current = target.engine.getFile();
         const auto library = FileLibrary::libraryFolder (target.kind);
@@ -208,61 +279,39 @@ private:
         });
     }
 
-    TiniAudioProcessor& processor;
+private:
     ModelTarget target;
     std::unique_ptr<juce::FileChooser> fileChooser;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> levelAttachment;
-
-    juce::String modelName, modelDetail;
-    bool hasModel = false, shownFailed = false;
 };
 
 //==============================================================================
-/** One line that shows an impulse response: its name, its sample rate and length, and a Load button.
+/** The strip of an impulse response: its name, its sample rate and length.
     A second slot can be added next to it later for the A/B mix of two IRs. */
-class IrSlot : public juce::Component
+class IrSlot : public SlotStrip
 {
 public:
-    static constexpr int height = 52;
-
-    explicit IrSlot (TiniAudioProcessor& p) : processor (p)
+    explicit IrSlot (TiniAudioProcessor& p)
+        : SlotStrip ("ir_prev", "ir_next", "impulse response"), processor (p)
     {
-        loadButton.setButtonText ("Load IR");
-        loadButton.onClick = [this] { chooseFile(); };
-
-        prevButton.setTooltip ("Previous impulse response in this folder");
-        nextButton.setTooltip ("Next impulse response in this folder");
-        prevButton.onClick = [this] { step (-1); };
-        nextButton.onClick = [this] { step (+1); };
-
-        clearButton.setButtonText ("Clear");
-        clearButton.setTooltip ("Go back to the built-in cabinet");
-        clearButton.onClick = [this] { processor.useBuiltInCab(); showFile ({}); };
-
-        browseButton.setButtonText ("Browse");
-        browseButton.setTooltip ("Show the impulse responses in this folder");
-        browseButton.setClickingTogglesState (true);
-        browseButton.setToggleState (true, juce::dontSendNotification);
-        browseButton.onClick = [this] { if (onBrowseToggled) onBrowseToggled(); };
-
-        for (auto* b : std::initializer_list<juce::Component*> { &loadButton, &clearButton, &browseButton, &prevButton, &nextButton })
-            addAndMakeVisible (b);
-
+        neighbour = [] (const juce::File& f, int delta) { return FileLibrary::neighbour (f, FileLibrary::Kind::cabs, delta); };
         showFile (processor.loadedIrFile);
     }
 
-    /** Called when the Browse button was switched. */
-    std::function<void()> onBrowseToggled;
-    bool isBrowseOpen() const { return browseButton.getToggleState(); }
-
     /** Loads an impulse response (from the dialog, the arrows or the browser list). */
-    void loadFile (const juce::File& file)
+    void loadFile (const juce::File& file) override
     {
         if (! file.existsAsFile())
             return;
 
         processor.loadImpulseResponse (file);
         showFile (file);
+    }
+
+    /** Goes back to the built-in cabinet (the "Use built-in cabinet" of the more menu). */
+    void useBuiltIn()
+    {
+        processor.useBuiltInCab();
+        showFile ({});
     }
 
     /** Called from the UI timer: a preset or session may have loaded another IR. */
@@ -272,51 +321,13 @@ public:
             showFile (processor.loadedIrFile);
     }
 
-    void paint (juce::Graphics& g) override
-    {
-        Theme::drawInset (g, getLocalBounds().toFloat(), 8.0f);
+protected:
+    juce::File currentFile() const override  { return processor.loadedIrFile; }
+    void clearSlot() override                { useBuiltIn(); }
+    juce::String clearLabel() const override { return "Use built-in cabinet"; }
+    bool canClear() const override           { return shownFile.existsAsFile(); }
 
-        auto text = getLocalBounds().reduced (16, 7).withTrimmedRight (buttonsWidth + 12);
-        auto top = text.removeFromTop (text.getHeight() / 2);
-
-        g.setColour (shownFile.existsAsFile() ? Theme::textHi : Theme::textMid);
-        g.setFont (Theme::ui (13.0f, true));
-        g.drawText (irName, top, juce::Justification::centredLeft, true);
-
-        g.setColour (Theme::textLo);
-        g.setFont (Theme::ui (11.5f));
-        g.drawText (irInfo.isNotEmpty() ? irInfo : juce::String ("Load a .wav file to use your own cabinet"), text,
-                    juce::Justification::centredLeft, true);
-    }
-
-    void resized() override
-    {
-        auto buttons = getLocalBounds().reduced (10, 0).withSizeKeepingCentre (getWidth() - 20, 30);
-        loadButton.setBounds (buttons.removeFromRight (84));
-        buttons.removeFromRight (6);
-        clearButton.setBounds (buttons.removeFromRight (56));
-        buttons.removeFromRight (6);
-        browseButton.setBounds (buttons.removeFromRight (72));
-        buttons.removeFromRight (6);
-        nextButton.setBounds (buttons.removeFromRight (28));
-        prevButton.setBounds (buttons.removeFromRight (28));
-    }
-
-    juce::TextButton loadButton, clearButton, browseButton;
-    StepButton prevButton { false, "ir_prev" }, nextButton { true, "ir_next" };
-
-private:
-    static constexpr int buttonsWidth = 84 + 56 + 72 + 56 + 4 * 6 + 12;
-
-    /** The impulse response before / after the loaded one in its folder. */
-    void step (int delta)
-    {
-        const auto file = FileLibrary::neighbour (processor.loadedIrFile, FileLibrary::Kind::cabs, delta);
-        if (file.existsAsFile() && file != processor.loadedIrFile)
-            loadFile (file);
-    }
-
-    void chooseFile()
+    void chooseFile() override
     {
         const auto library = FileLibrary::libraryFolder (FileLibrary::Kind::cabs);
         fileChooser = std::make_unique<juce::FileChooser> ("Select an impulse response (.wav)",
@@ -339,36 +350,37 @@ private:
         });
     }
 
+private:
     void showFile (const juce::File& file)
     {
         shownFile = file;
-        irName = file.existsAsFile() ? file.getFileName() : juce::String ("Built-in cabinet");
-        irInfo = {};
-        clearButton.setVisible (file.existsAsFile());
+        juce::String info;
 
         if (file.existsAsFile())
         {
             if (std::unique_ptr<juce::AudioFormatReader> reader { processor.formatManager.createReaderFor (file) })
             {
                 const double ms = 1000.0 * (double) reader->lengthInSamples / reader->sampleRate;
-                irInfo = juce::String (reader->sampleRate / 1000.0, 1) + " kHz" + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
-                         + juce::String (juce::roundToInt (ms)) + " ms";
+                info = juce::String (reader->sampleRate / 1000.0, 1) + " kHz" + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
+                       + juce::String (juce::roundToInt (ms)) + " ms";
             }
         }
 
-        repaint();
+        setText (file.existsAsFile() ? file.getFileName() : juce::String ("Built-in cabinet"),
+                 info.isNotEmpty() ? info : juce::String ("Load a .wav file to use your own cabinet"),
+                 ! file.existsAsFile(), false);
     }
 
     TiniAudioProcessor& processor;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::File shownFile;
-    juce::String irName { "Built-in cabinet" }, irInfo;
 };
 
 //==============================================================================
 /** The amp: Built-in / NAM switch, the model slot while NAM is selected, and the knobs.
-    Drive is the big main knob (Input takes its place for a NAM model), then Low, Mid and High,
-    then Master. */
+    Drive is the big main knob (Input takes its place for a NAM model, with the Level match switch
+    under it), then Low, Mid and High, then Master. In NAM mode the list of models takes the right
+    column, from the top of the page down. */
 class AmpPage : public juce::Component
 {
 public:
@@ -409,10 +421,16 @@ public:
         builtInButton.onClick = [this] { setAmpType (0); };
         namButton.onClick     = [this] { setAmpType (1); };
 
+        levelSwitch.setTooltip ("Level match: every model plays at the same loudness (-18 dB)");
+        levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "NAM_NORM", levelSwitch);
+        addChildComponent (levelSwitch);
+
         modelSlot.onModelPicked = [this] { setAmpType (1); };
         modelSlot.onBrowseToggled = [this] { resized(); refresh(); };
+        modelSlot.neighbour = [this] (const juce::File& f, int delta) { return browser.neighbourOf (f, delta); };
         addChildComponent (modelSlot);
 
+        browser.onHide = [this] { modelSlot.setBrowseOpen (false); };
         browser.onPick = [this] (const juce::File& file) { modelSlot.loadFile (file); };
         browser.onRenamed = [this] (const juce::File& oldFile, const juce::File& newFile)
         {
@@ -436,6 +454,7 @@ public:
         namButton.setToggleState (namMode, juce::dontSendNotification);
         drive.setVisible (! namMode);
         namIn.setVisible (namMode);
+        levelSwitch.setVisible (namMode);
         modelSlot.setVisible (namMode);
 
         const bool showBrowser = namMode && modelSlot.isBrowseOpen();
@@ -464,11 +483,28 @@ public:
         g.setColour (Theme::divider);
         for (auto x : dividerX)
             g.fillRect ((float) x, (float) dividerTop, 1.0f, (float) (dividerBottom - dividerTop));
+
+        if (levelSwitch.isVisible())
+        {
+            g.setColour (levelSwitch.getToggleState() ? Theme::textMid : Theme::textLo);
+            g.setFont (Theme::ui (12.0f));
+            g.drawText ("Level match", levelLabel, juce::Justification::centredLeft, false);
+        }
     }
 
     void resized() override
     {
         auto b = getLocalBounds();
+
+        // the list of models takes the right column while it is open (NAM mode only), the whole height:
+        // everything for picking a model is in it, the strip on the left shows what plays
+        const bool namMode = processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f;
+        laidOutWithBrowser = namMode && modelSlot.isBrowseOpen();
+        if (laidOutWithBrowser)
+        {
+            browser.setBounds (b.removeFromRight (browserWidth));
+            b.removeFromRight (20);
+        }
 
         auto top = b.removeFromTop (ModelSlot::height);
         segmentArea = top.removeFromLeft (172).withSizeKeepingCentre (172, 36);
@@ -478,15 +514,6 @@ public:
         modelSlot.setBounds (top);
 
         b.removeFromTop (8);
-
-        // the list of models takes the right side while it is open (NAM mode only)
-        const bool namMode = processor.apvts.getRawParameterValue ("AMP_TYPE")->load() > 0.5f;
-        laidOutWithBrowser = namMode && modelSlot.isBrowseOpen();
-        if (laidOutWithBrowser)
-        {
-            browser.setBounds (b.removeFromRight (browserWidth));
-            b.removeFromRight (16);
-        }
 
         const int w = b.getWidth();
         auto driveSection  = b.removeFromLeft (w * 30 / 100);
@@ -504,7 +531,18 @@ public:
         };
 
         place (drive, driveSection, 176);
-        place (namIn, driveSection, 176);
+
+        // Input, with the Level match switch under it (it acts on the level the model gets)
+        place (namIn, driveSection.withTrimmedBottom (levelRowHeight), 176);
+        {
+            const auto font = Theme::ui (12.0f);
+            const int labelW = (int) std::ceil (font.getStringWidthFloat ("Level match")) + 2;
+            const int rowW = 44 + 8 + labelW;
+            auto row = juce::Rectangle<int> (rowW, 28).withCentre ({ namIn.getBounds().getCentreX(), namIn.getBottom() + 6 + 14 });
+            levelSwitch.setBounds (row.removeFromLeft (44));
+            row.removeFromLeft (8);
+            levelLabel = row;
+        }
 
         const int cellW = eqSection.getWidth() / 3;
         for (auto* k : { &low, &mid, &high })
@@ -520,9 +558,10 @@ public:
     juce::TextButton builtInButton, namButton;
     ModelSlot modelSlot;
     FileBrowserList browser { FileLibrary::Kind::amps };
+    ToggleSwitch levelSwitch { Theme::ampColour };
 
 private:
-    static constexpr int browserWidth = 300;
+    static constexpr int browserWidth = 300, levelRowHeight = 40;
     juce::File browsedFile;
     bool laidOutWithBrowser = false;
     bool laidOutInNamMode = false;
@@ -540,7 +579,8 @@ private:
 
     TiniAudioProcessor& processor;
     LabeledKnob drive, namIn, low, mid, high, master;
-    juce::Rectangle<int> segmentArea;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> levelAttachment;
+    juce::Rectangle<int> segmentArea, levelLabel;
     std::vector<int> dividerX;
     int dividerTop = 0, dividerBottom = 0;
 
@@ -570,12 +610,14 @@ public:
             ModelTarget { engine,
                           [&processor, copy] (const juce::File& f) { processor.loadPedalModel (copy, f); },
                           [&processor, copy] { processor.unloadPedalModel (copy); },
-                          FileLibrary::Kind::pedals, {},
+                          FileLibrary::Kind::pedals,
                           "Load a .nam capture of a pedal" });
         modelSlot->onBrowseToggled = [this] { resized(); refresh(); };
         addAndMakeVisible (*modelSlot);
 
         browser = std::make_unique<FileBrowserList> (FileLibrary::Kind::pedals);
+        modelSlot->neighbour = [this] (const juce::File& f, int delta) { return browser->neighbourOf (f, delta); };
+        browser->onHide = [this] { modelSlot->setBrowseOpen (false); };
         browser->onPick = [this] (const juce::File& file) { modelSlot->loadFile (file); };
         browser->onRenamed = [&processor, copy] (const juce::File& oldFile, const juce::File& newFile)
         {
@@ -683,14 +725,15 @@ public:
 
         if (modelSlot != nullptr)
         {
-            modelSlot->setBounds (b.removeFromTop (ModelSlot::height));
-            b.removeFromTop (8);
-
+            // the list takes the right column under the header, the strip and the knobs the rest
             if (modelSlot->isBrowseOpen())
             {
                 browser->setBounds (b.removeFromRight (300));
-                b.removeFromRight (16);
+                b.removeFromRight (20);
             }
+
+            modelSlot->setBounds (b.removeFromTop (ModelSlot::height));
+            b.removeFromTop (8);
         }
 
         const int n = knobs.size();
@@ -754,6 +797,8 @@ public:
         addAndMakeVisible (highCut);
 
         irSlot.onBrowseToggled = [this] { resized(); refresh(); };
+        irSlot.neighbour = [this] (const juce::File& f, int delta) { return browser.neighbourOf (f, delta); };
+        browser.onHide = [this] { irSlot.setBrowseOpen (false); };
         browser.onPick = [this] (const juce::File& file) { irSlot.loadFile (file); };
         browser.onRenamed = [this] (const juce::File& oldFile, const juce::File& newFile)
         {
@@ -781,14 +826,16 @@ public:
     void resized() override
     {
         auto b = getLocalBounds();
-        irSlot.setBounds (b.removeFromTop (IrSlot::height));
-        b.removeFromTop (8);
 
+        // the list takes the right column, the whole height; the strip and the filters the rest
         if (irSlot.isBrowseOpen())
         {
             browser.setBounds (b.removeFromRight (300));
-            b.removeFromRight (16);
+            b.removeFromRight (20);
         }
+
+        irSlot.setBounds (b.removeFromTop (IrSlot::height));
+        b.removeFromTop (8);
 
         const int cellW = 200, cellH = juce::jmin (b.getHeight(), 120 + 28);
         auto row = b.withSizeKeepingCentre (cellW * 2, cellH);

@@ -3,6 +3,7 @@
 #include "../LibraryPaths.h"
 #include "Dialog.h"
 #include "Theme.h"
+#include "Widgets.h"
 
 //==============================================================================
 /** Browsing helpers on top of LibraryPaths.h: which folder a list shows, the sorted files in it and how
@@ -156,21 +157,80 @@ namespace FileActions
     }
 }
 
-//==============================================================================
-/** A scrolling list of the models or impulse responses in one folder. The loaded file is marked; a
-    click (or Enter on the selected line) calls onPick.
 
-    The list follows the folder: while it is visible it looks at the folder about once a second, so files
-    added or removed in Explorer show up without leaving the app. It also manages the files: a right
-    click offers Rename, Show in Explorer and Delete (to the Recycle Bin), "Add packs" copies files in,
-    "Open folder" shows the folder, and files can be dropped onto the list. */
+//==============================================================================
+/** The pack selector of a model list: what the list shows ("All amp models", a pack, a folder) and a
+    chevron. A click opens the menu of packs (see FileBrowserList::showPackMenu). */
+class PackButton : public juce::Button
+{
+public:
+    PackButton() : juce::Button ("pack")
+    {
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTooltip ("Choose a pack, or all models");
+    }
+
+    void setText (const juce::String& newText)
+    {
+        if (newText != text)
+        {
+            text = newText;
+            repaint();
+        }
+    }
+
+    const juce::String& getText() const { return text; }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (Theme::inset.brighter (down ? 0.1f : highlighted ? 0.05f : 0.0f));
+        g.fillRoundedRectangle (r, 8.0f);
+
+        auto inner = r.reduced (12.0f, 0.0f);
+        const auto chevronArea = inner.removeFromRight (12.0f);
+
+        g.setColour (Theme::textHi);
+        g.setFont (Theme::ui (13.0f, true));
+        g.drawText (text, inner.withTrimmedRight (8.0f), juce::Justification::centredLeft, true);
+
+        const auto c = chevronArea.getCentre();
+        juce::Path chevron;
+        chevron.startNewSubPath (c.x - 4.5f, c.y - 2.0f);
+        chevron.lineTo (c.x, c.y + 2.5f);
+        chevron.lineTo (c.x + 4.5f, c.y - 2.0f);
+        g.setColour (highlighted ? Theme::textHi : Theme::textMid);
+        g.strokePath (chevron, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+private:
+    juce::String text;
+};
+
+//==============================================================================
+/** The list of models (or impulse responses) next to a model slot. It has everything for picking one:
+
+      title             search  +  folder  hide
+      [ pack          v ]       what the list shows: all models, one pack, or a folder
+      path of that folder
+      the files ...
+
+    The list shows the folder of the loaded file until the pack menu says otherwise, and it stays on the
+    pack (or on "All") the user chose while the loaded file is in it. A click (or Enter on the selected
+    line) calls onPick. The search filters what the list shows.
+
+    The list follows the folder: while it is visible it looks at it about once a second, so files added
+    or removed in Explorer show up without leaving the app. It also manages the files: a right click
+    offers Rename, Show in file manager and Delete (to the Recycle Bin), + copies files and packs in,
+    the folder icon opens the folder, and files can be dropped onto the list. */
 class FileBrowserList : public juce::Component,
                         public juce::FileDragAndDropTarget,
                         private juce::ListBoxModel,
                         private juce::Timer
 {
 public:
-    static constexpr int rowHeight = 30, headerHeight = 54;
+    static constexpr int rowHeight = 30, titleHeight = 30, packHeight = 32, pathHeight = 24;
+    static constexpr int headerHeight = titleHeight + 6 + packHeight + pathHeight;
 
     explicit FileBrowserList (FileLibrary::Kind libraryKind)
         : kind (libraryKind), wildcard (FileLibrary::wildcardFor (libraryKind))
@@ -182,15 +242,27 @@ public:
         list.getVerticalScrollBar().setAutoHide (true);
         addAndMakeVisible (list);
 
-        addButton.setButtonText ("Add packs");
-        addButton.setTooltip ("Copy files, zip packs or folders into this library");
-        addButton.onClick = [this] { chooseFilesToAdd(); };
-        addAndMakeVisible (addButton);
-
-        folderButton.setButtonText ("Open folder");
-        folderButton.setTooltip ("Show this folder in the file manager");
+        searchButton.onClick = [this] { openSearch(); };
+        addButton.onClick    = [this] { chooseFilesToAdd(); };
         folderButton.onClick = [this] { openFolder(); };
-        addAndMakeVisible (folderButton);
+        hideButton.onClick   = [this] { if (onHide) onHide(); };
+        packButton.onClick   = [this] { showPackMenu(); };
+
+        for (auto* b : std::initializer_list<juce::Component*> { &searchButton, &addButton, &folderButton, &packButton })
+            addAndMakeVisible (b);
+        addChildComponent (hideButton);
+
+        searchBox.setOpaque (false);   // rounded corners
+        searchBox.setTextToShowWhenEmpty ("Search " + lowerFirst (FileLibrary::title (kind)), Theme::textLo);
+        searchBox.setFont (Theme::ui (13.0f));
+        searchBox.setIndents (10, 6);
+        searchBox.onTextChange = [this] { setSearch (searchBox.getText()); };
+        searchBox.onEscapeKey  = [this] { closeSearch(); };
+        searchBox.onReturnKey  = [this] { pick (0); };
+        addChildComponent (searchBox);
+
+        closeSearchButton.onClick = [this] { closeSearch(); };
+        addChildComponent (closeSearchButton);
     }
 
     ~FileBrowserList() override
@@ -208,31 +280,106 @@ public:
     /** Called after a file was deleted here. */
     std::function<void (const juce::File&)> onDeleted;
 
-    /** Marks the loaded file; shows its folder (rescanning only if the folder changed). */
+    /** Called by the hide button; without it the list has no hide button. */
+    std::function<void()> onHide;
+
+    /** Marks the loaded file. The list stays on what it shows if the file is in it, and goes to the
+        file's folder if not. */
     void setCurrentFile (const juce::File& file)
     {
         if (file != current)
-            pinned = {};   // another file was loaded: follow it again
+        {
+            current = file;
+            if (file.existsAsFile() && ! viewContains (file))
+            {
+                showingAll = false;
+                folder = file.getParentDirectory();
+            }
+        }
 
-        current = file;
-        const auto newFolder = folderToShow();
-        const bool folderChanged = newFolder != folder;
+        rescan();
+    }
 
-        if (folderChanged)
-            rescan (newFolder);
-        else
-            list.repaint();
+    /** Shows every file of the library, all packs together. */
+    void showAll()
+    {
+        showingAll = true;
+        rescan();
+    }
+
+    /** Shows one folder: a pack, the library folder itself, or the folder of a file outside the library. */
+    void showFolder (const juce::File& newFolder)
+    {
+        showingAll = false;
+        folder = newFolder;
+        rescan();
+    }
+
+    bool isShowingAll() const { return showingAll; }
+
+    /** The folder the list shows (the library folder while it shows all of it). */
+    juce::File getFolder() const { return showingAll ? FileLibrary::libraryFolder (kind) : folder; }
+
+    /** What the pack button says. */
+    const juce::String& getViewName() const { return packButton.getText(); }
+
+    /** Filters the list: a file is shown if its name (or its pack, while all are shown) has every word. */
+    void setSearch (const juce::String& text)
+    {
+        if (text != search)
+        {
+            search = text;
+            rescan();
+        }
     }
 
     /** Reads the folder again (new files, removed files). */
-    void rescan() { rescan (folder); }
+    void rescan()
+    {
+        files = scan();
+
+        juce::Array<juce::File> fresh;
+        for (const auto& f : files)
+            if (matchesSearch (f))
+                fresh.add (f);
+
+        if (fresh != shown)
+        {
+            shown = std::move (fresh);
+            list.updateContent();
+
+            const int row = shown.indexOf (current);
+            if (row >= 0)
+                list.scrollToEnsureRowIsOnscreen (row);
+        }
+
+        packButton.setText (viewName());
+        list.repaint();
+        repaint();
+    }
 
     /** Looks at the folder once; the list only changes when its content did. Runs by itself while visible. */
     void refreshIfChanged()
     {
-        const auto newFolder = folderToShow();
-        if (newFolder != folder || FileLibrary::list (folder, wildcard) != files)
-            rescan (newFolder);
+        const bool wasAll = showingAll;
+        const auto oldFolder = folder;
+
+        if (scan() != files || showingAll != wasAll || folder != oldFolder)
+            rescan();
+    }
+
+    /** The file `delta` places after (or before) `file` in what the list shows (with the search), wrapping
+        around; for a file that is not in it, the neighbour in its folder. Used by the arrows of the slot. */
+    juce::File neighbourOf (const juce::File& file, int delta) const
+    {
+        for (const auto* source : { &shown, &files })
+        {
+            const int index = source->indexOf (file);
+            if (index >= 0)
+                return (*source)[(index + delta + source->size()) % source->size()];
+        }
+
+        return FileLibrary::neighbour (file, kind, delta);
     }
 
     /** Copies `sources` into this library and shows them. Returns how many were added. */
@@ -264,8 +411,13 @@ public:
         if (! done.empty())
         {
             // the new files live in the library: show where they went (a pack is a folder of its own)
-            pinned = done.front().file.getParentDirectory();
-            rescan (folderToShow());
+            const auto arrived = done.front().file;
+            if (! viewContains (arrived))
+            {
+                showingAll = false;
+                folder = arrived.getParentDirectory();
+            }
+            rescan();
         }
 
         return (int) done.size();
@@ -305,10 +457,9 @@ public:
         return true;
     }
 
-    int getNumRows() override { return files.size(); }
-    int getNumFiles() const { return files.size(); }
-    juce::File getFile (int row) const { return files[row]; }
-    const juce::File& getFolder() const { return folder; }
+    int getNumRows() override { return shown.size(); }
+    int getNumFiles() const { return shown.size(); }
+    juce::File getFile (int row) const { return shown[row]; }
     FileLibrary::Kind getKind() const { return kind; }
 
     void visibilityChanged() override
@@ -316,7 +467,6 @@ public:
         if (isVisible())
         {
             FileLibrary::ensureFolders();   // so there is a folder to put files in
-            refreshIfChanged();
             rescan();                       // files may have been added while the list was hidden
             startTimer (1000);
         }
@@ -328,29 +478,36 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto head = getLocalBounds().removeFromTop (headerHeight).reduced (4, 0);
+        if (! searching)
+        {
+            g.setColour (Theme::textMid);
+            g.setFont (Theme::ui (13.0f, true));
+            g.drawText (FileLibrary::title (kind), titleArea.withTrimmedLeft (4), juce::Justification::centredLeft, true);
+        }
 
-        auto top = head.removeFromTop (30);
-        top.removeFromRight (buttonsWidth);
-        g.setColour (Theme::textMid);
-        g.setFont (Theme::ui (13.0f, true));
-        g.drawText (FileLibrary::title (kind), top, juce::Justification::centredLeft, false);
-
+        const auto shownFolder = getFolder();
         g.setColour (Theme::textLo);
         g.setFont (Theme::ui (11.0f));
-        g.drawText (folder.isDirectory() ? folder.getFullPathName() : juce::String ("No folder yet"), head,
-                    juce::Justification::topLeft, true);
+        g.drawText (shownFolder.isDirectory() ? shownFolder.getFullPathName() : juce::String ("No folder yet"),
+                    pathArea.withTrimmedLeft (4), juce::Justification::centredLeft, true);
 
-        if (files.isEmpty())
+        if (shown.isEmpty())
         {
-            auto body = getLocalBounds().withTrimmedTop (headerHeight).reduced (4, 8);
+            auto body = list.getBounds().reduced (4, 8);
             g.setColour (Theme::textLo);
             g.setFont (Theme::ui (12.0f));
 
-            const auto what = FileLibrary::isModelKind (kind) ? juce::String (".nam files")
-                                                              : juce::String ("impulse responses (.wav)");
-            g.drawFittedText ("No " + what + " here yet.\nDrop files onto this list, use Add packs,\nor copy them into the folder - the list follows it.",
-                              body, juce::Justification::topLeft, 6);
+            if (! files.isEmpty())
+            {
+                g.drawFittedText ("Nothing here matches \"" + search.trim() + "\".", body, juce::Justification::topLeft, 3);
+            }
+            else
+            {
+                const auto what = FileLibrary::isModelKind (kind) ? juce::String (".nam files")
+                                                                  : juce::String ("impulse responses (.wav)");
+                g.drawFittedText ("No " + what + " here yet.\nDrop files onto this list, add packs with +,\nor copy them into the folder - the list follows it.",
+                                  body, juce::Justification::topLeft, 6);
+            }
         }
 
         if (dropHighlight)
@@ -362,12 +519,37 @@ public:
 
     void resized() override
     {
-        auto top = getLocalBounds().removeFromTop (30).reduced (4, 0).withSizeKeepingCentre (getWidth() - 8, 24);
-        folderButton.setBounds (top.removeFromRight (folderWidth));
-        top.removeFromRight (6);
-        addButton.setBounds (top.removeFromRight (addWidth));
+        auto b = getLocalBounds();
+        auto titleRow = b.removeFromTop (titleHeight);
 
-        list.setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+        const int s = IconButton::size;
+        auto icon = [&titleRow, s] { return titleRow.removeFromRight (s).withSizeKeepingCentre (s, s); };
+
+        hideButton.setVisible (static_cast<bool> (onHide));
+        if (onHide)
+        {
+            hideButton.setBounds (icon());
+            titleRow.removeFromRight (2);
+        }
+        folderButton.setBounds (icon());
+        addButton.setBounds (icon());
+        titleRow.removeFromRight (2);
+
+        // the search box takes the title's place (and the search icon's) while it is open
+        const auto searchSlot = icon();
+        searchButton.setBounds (searchSlot);
+        titleArea = titleRow;
+
+        const auto box = titleRow.withRight (searchSlot.getRight()).withSizeKeepingCentre (titleRow.getWidth() + s, 28);
+        searchBox.setBounds (box);
+        closeSearchButton.setBounds (box.withLeft (box.getRight() - 26).withSizeKeepingCentre (24, 24));
+        searchButton.setVisible (! searching);
+
+        b.removeFromTop (6);
+        packButton.setBounds (b.removeFromTop (packHeight));
+        pathArea = b.removeFromTop (pathHeight);
+
+        list.setBounds (b);
     }
 
     //==========================================================================
@@ -398,15 +580,104 @@ public:
     }
 
     // exposed so tests can drive them
-    juce::TextButton addButton, folderButton;
+    IconButton searchButton { "list_search", Icons::search(), "Search this list" },
+               addButton    { "list_add", Icons::plus(), "Add packs: copy files, zip packs or folders into the library" },
+               folderButton { "list_folder", Icons::folder(), "Show this folder in the file manager" },
+               hideButton   { "list_hide", Icons::hidePanel(), "Hide the list" };
+    PackButton packButton;
+    juce::TextEditor searchBox;
+
+    bool isSearching() const { return searching; }
+
+    /** Opens the search box in the title row. */
+    void openSearch()
+    {
+        searching = true;
+        searchBox.setVisible (true);
+        closeSearchButton.setVisible (true);
+        resized();
+        repaint();
+        searchBox.grabKeyboardFocus();
+    }
+
+    /** Closes the search box; the list shows everything again. */
+    void closeSearch()
+    {
+        searching = false;
+        searchBox.setText ({}, false);
+        searchBox.setVisible (false);
+        closeSearchButton.setVisible (false);
+        setSearch ({});
+        resized();
+        repaint();
+    }
+
+    /** The menu of the pack button: all models, the library folder itself (if files sit there), each pack,
+        and the folder outside the library the list shows (if it does). */
+    void showPackMenu()
+    {
+        const auto library = FileLibrary::libraryFolder (kind);
+        const auto packs = packFolders();
+        const bool atRoot = ! showingAll && folder == library;
+
+        juce::PopupMenu menu;
+        menu.addItem (allId, allLabel(), true, showingAll);
+
+        if (atRoot || ! FileLibrary::list (library, wildcard).isEmpty())
+            menu.addItem (rootId, rootLabel(), true, atRoot);
+
+        if (! packs.isEmpty())
+        {
+            menu.addSectionHeader ("Packs");
+            for (int i = 0; i < packs.size(); ++i)
+                menu.addItem (firstPackId + i, packs[i].getFileName(), true, ! showingAll && folder == packs[i]);
+        }
+
+        if (! showingAll && folder.isDirectory() && folder != library && ! packs.contains (folder))
+        {
+            menu.addSeparator();
+            menu.addItem (otherId, folder.getFileName(), true, true);
+        }
+
+        Theme::styleMenu (menu, *this);
+        menu.showMenuAsync (Theme::menuBelow (packButton).withMinimumWidth (packButton.getWidth()),
+                            [safe = juce::Component::SafePointer<FileBrowserList> (this), packs, library] (int choice)
+        {
+            if (safe == nullptr || choice == 0 || choice == otherId)
+                return;
+
+            if (choice == allId)
+                safe->showAll();
+            else if (choice == rootId)
+                safe->showFolder (library);
+            else if (juce::isPositiveAndBelow (choice - firstPackId, packs.size()))
+                safe->showFolder (packs[choice - firstPackId]);
+        });
+    }
+
+    /** The packs of the library: its first level of folders, by name. */
+    juce::Array<juce::File> packFolders() const
+    {
+        auto packs = FileLibrary::libraryFolder (kind).findChildFiles (juce::File::findDirectories, false);
+
+        struct ByName
+        {
+            static int compareElements (const juce::File& a, const juce::File& b)
+            {
+                return a.getFileName().compareNatural (b.getFileName());
+            }
+        } byName;
+        packs.sort (byName);
+        return packs;
+    }
 
     /** The context menu of a row (also used by the tests through the actions below). */
     void showMenu (int row)
     {
-        if (! juce::isPositiveAndBelow (row, files.size()))
+        if (! juce::isPositiveAndBelow (row, shown.size()))
             return;
 
-        const auto file = files[row];
+        const auto file = shown[row];
 
         juce::PopupMenu menu;
         menu.addItem (1, "Load");
@@ -434,14 +705,55 @@ public:
     }
 
 private:
-    static constexpr int addWidth = 70, folderWidth = 88, buttonsWidth = addWidth + folderWidth + 6;
+    static constexpr int allId = 1, rootId = 2, otherId = 3, firstPackId = 100;
+
+    static juce::String lowerFirst (const juce::String& s) { return s.substring (0, 1).toLowerCase() + s.substring (1); }
+
+    juce::String allLabel() const  { return "All " + lowerFirst (FileLibrary::title (kind)); }
+    juce::String rootLabel() const { return FileLibrary::folderName (kind) + " (no pack)"; }
+
+    juce::String viewName() const
+    {
+        if (showingAll)
+            return allLabel();
+        if (folder == FileLibrary::libraryFolder (kind))
+            return rootLabel();
+        return folder.isDirectory() ? folder.getFileName() : juce::String ("No folder yet");
+    }
 
     void timerCallback() override { refreshIfChanged(); }
 
-    /** The folder of the loaded file, unless files were just added to the library. */
-    juce::File folderToShow() const
+    bool viewContains (const juce::File& file) const
     {
-        return pinned != juce::File() ? pinned : FileLibrary::folderFor (current, kind);
+        return showingAll ? file.isAChildOf (FileLibrary::libraryFolder (kind))
+                          : folder != juce::File() && file.getParentDirectory() == folder;
+    }
+
+    /** The files of what the list shows. A folder that is gone (a pack renamed or removed elsewhere) is
+        replaced by the folder of the loaded file. */
+    juce::Array<juce::File> scan()
+    {
+        if (! showingAll && ! folder.isDirectory())
+            folder = FileLibrary::folderFor (current, kind);
+
+        return showingAll ? FileLibrary::listTree (FileLibrary::libraryFolder (kind), wildcard)
+                          : FileLibrary::list (folder, wildcard);
+    }
+
+    bool matchesSearch (const juce::File& file) const
+    {
+        const auto words = juce::StringArray::fromTokens (search, " ", "");
+        if (words.isEmpty())
+            return true;
+
+        auto text = file.getFileNameWithoutExtension();
+        if (showingAll)
+            text << " " << FileLibrary::packOf (file, kind);
+
+        for (const auto& word : words)
+            if (word.isNotEmpty() && ! text.containsIgnoreCase (word))
+                return false;
+        return true;
     }
 
     void setDropHighlight (bool on)
@@ -453,30 +765,11 @@ private:
         }
     }
 
-    void rescan (const juce::File& newFolder)
-    {
-        folder = newFolder;
-        auto fresh = FileLibrary::list (folder, wildcard);
-        const bool same = fresh == files;
-        files = std::move (fresh);
-
-        if (! same)
-        {
-            list.updateContent();
-
-            const int row = files.indexOf (current);
-            if (row >= 0)
-                list.scrollToEnsureRowIsOnscreen (row);
-        }
-
-        list.repaint();
-        repaint();
-    }
-
     void openFolder()
     {
         FileLibrary::ensureFolders();
-        const auto target = folder.isDirectory() ? folder : FileLibrary::libraryFolder (kind);
+        const auto shownFolder = getFolder();
+        const auto target = shownFolder.isDirectory() ? shownFolder : FileLibrary::libraryFolder (kind);
         target.startAsProcess();
     }
 
@@ -514,10 +807,10 @@ private:
 
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
     {
-        if (! juce::isPositiveAndBelow (row, files.size()))
+        if (! juce::isPositiveAndBelow (row, shown.size()))
             return;
 
-        const auto file = files[row];
+        const auto file = shown[row];
         const bool isCurrent = file == current;
         auto r = juce::Rectangle<float> (0.0f, 1.0f, (float) width, (float) height - 2.0f);
 
@@ -534,6 +827,21 @@ private:
             g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre ({ text.getX() + 3.0f, text.getCentreY() }));
         }
         text.removeFromLeft (16.0f);
+
+        // with all packs in one list, each line says which pack it is from
+        if (showingAll)
+        {
+            const auto pack = FileLibrary::packOf (file, kind);
+            if (pack.isNotEmpty())
+            {
+                const auto font = Theme::ui (11.0f);
+                const float w = juce::jmin (text.getWidth() * 0.4f, font.getStringWidthFloat (pack) + 2.0f);
+                g.setColour (Theme::textLo);
+                g.setFont (font);
+                g.drawText (pack, text.removeFromRight (w), juce::Justification::centredRight, true);
+                text.removeFromRight (8.0f);
+            }
+        }
 
         g.setColour (isCurrent ? Theme::textHi : Theme::textMid);
         g.setFont (Theme::ui (13.0f, isCurrent));
@@ -552,21 +860,24 @@ private:
 
     void deleteKeyPressed (int row) override
     {
-        if (juce::isPositiveAndBelow (row, files.size()))
-            askDelete (files[row]);
+        if (juce::isPositiveAndBelow (row, shown.size()))
+            askDelete (shown[row]);
     }
 
     void pick (int row)
     {
-        if (juce::isPositiveAndBelow (row, files.size()) && onPick)
-            onPick (files[row]);
+        if (juce::isPositiveAndBelow (row, shown.size()) && onPick)
+            onPick (shown[row]);
     }
 
     FileLibrary::Kind kind;
-    juce::String wildcard;
+    juce::String wildcard, search;
     juce::ListBox list;
-    juce::Array<juce::File> files;
-    juce::File folder, current, pinned;
+    juce::Array<juce::File> files, shown;   // what the view holds, and what of it the search lets through
+    juce::File folder, current;
+    bool showingAll = false, searching = false;
+    IconButton closeSearchButton { "list_search_close", Icons::close(), "Close the search" };
+    juce::Rectangle<int> titleArea, pathArea;
     std::unique_ptr<juce::FileChooser> fileChooser;
     bool dropHighlight = false;
 

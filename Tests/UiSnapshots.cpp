@@ -513,15 +513,15 @@ void renderUiSnapshots (const juce::File& dir)
         save (*editor, dir.getChildFile ("ui_amp_nam_loaded.png"));
 
         const float levelBefore = p.apvts.getRawParameterValue ("NAM_NORM")->load();
-        amp.modelSlot.levelButton.triggerClick();
+        amp.levelSwitch.triggerClick();
         settleLoop (50);
         report ((p.apvts.getRawParameterValue ("NAM_NORM")->load() > 0.5f) != (levelBefore > 0.5f),
                 "Level match toggles the normalisation (" + juce::String (levelBefore) + " -> "
                     + juce::String (p.apvts.getRawParameterValue ("NAM_NORM")->load()) + ")");
-        amp.modelSlot.levelButton.triggerClick();
+        amp.levelSwitch.triggerClick();
         settleLoop (50);
 
-        amp.modelSlot.clearButton.triggerClick();
+        amp.modelSlot.clear();
         settle();
         report (p.nam.getStatus().state == NamEngine::Status::State::empty && ! p.nam.hasModel(), "Clear removes the model");
 
@@ -799,7 +799,7 @@ void renderUiSnapshots (const juce::File& dir)
 
         // the Browse switch hides the list and gives the width back to the knobs
         const int widthWithList = amp.getDriveKnob().getWidth() + amp.getInputKnob().getWidth();
-        amp.modelSlot.browseButton.triggerClick();
+        amp.browser.hideButton.triggerClick();
         settleLoop (100);
         report (! amp.browser.isVisible(), "Browse switches the list off");
         report (amp.getInputKnob().getWidth() + amp.getDriveKnob().getWidth() > widthWithList,
@@ -808,6 +808,68 @@ void renderUiSnapshots (const juce::File& dir)
         amp.modelSlot.browseButton.triggerClick();
         settleLoop (100);
         report (amp.browser.isVisible(), "...and on again");
+        report (! amp.modelSlot.browseButton.isVisible(), "...and the strip's Browse button is only there while the list is hidden");
+
+        // Level match sits under the Input knob
+        report (amp.levelSwitch.isVisible() && amp.levelSwitch.getY() >= amp.getInputKnob().getBottom()
+                    && std::abs (amp.levelSwitch.getBounds().getCentreX() - amp.getInputKnob().getBounds().getCentreX()) < 80,
+                "the Level match switch is under the Input knob");
+
+        // the pack menu: all models, one pack, or the folder of a file outside the library
+        {
+            const auto amps = FileLibrary::libraryFolder (FileLibrary::Kind::amps);
+            const auto packA = amps.getChildFile ("Pack A"), packB = amps.getChildFile ("Pack B");
+            packA.createDirectory();
+            packB.createDirectory();
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (packA.getChildFile ("TS9 Drive 0.nam"));
+            testModels.getChildFile ("test_a2.nam").copyFileTo (packA.getChildFile ("TS9 Drive 5.nam"));
+            testModels.getChildFile ("test_wavenet.nam").copyFileTo (packB.getChildFile ("Plexi Crunch.nam"));
+            const int inLibrary = FileLibrary::listTree (amps, "*.nam").size();
+
+            report (amp.browser.packFolders().contains (packA) && amp.browser.packFolders().contains (packB),
+                    "the pack menu offers the packs of the library");
+
+            amp.browser.showAll();
+            settle();
+            report (amp.browser.isShowingAll() && amp.browser.getNumFiles() == inLibrary && amp.browser.getViewName() == "All amp models",
+                    "All amp models lists every model of the library (" + juce::String (amp.browser.getNumFiles()) + " of "
+                        + juce::String (inLibrary) + ")");
+
+            amp.browser.onPick (packA.getChildFile ("TS9 Drive 0.nam"));
+            waitForModel();
+            settleLoop (100);
+            report (p.nam.getFile() == packA.getChildFile ("TS9 Drive 0.nam") && amp.browser.isShowingAll(),
+                    "picking a model from All keeps the list on All");
+            save (*editor, dir.getChildFile ("ui_amp_nam_browser_all.png"));
+
+            amp.modelSlot.nextButton.triggerClick();
+            waitForModel();
+            report (p.nam.getFile() == packA.getChildFile ("TS9 Drive 5.nam"), "the arrows step through what the list shows");
+
+            amp.browser.openSearch();
+            amp.browser.searchBox.setText ("plexi");
+            settle();
+            report (amp.browser.isSearching() && amp.browser.getNumFiles() == 1
+                        && amp.browser.getFile (0) == packB.getChildFile ("Plexi Crunch.nam"),
+                    "the search filters the list (" + juce::String (amp.browser.getNumFiles()) + ")");
+            save (*editor, dir.getChildFile ("ui_amp_nam_browser_search.png"));
+            amp.browser.closeSearch();
+            settle();
+            report (! amp.browser.isSearching() && amp.browser.getNumFiles() == inLibrary, "closing the search shows everything again");
+
+            amp.browser.showFolder (packB);
+            settle();
+            report (! amp.browser.isShowingAll() && amp.browser.getNumFiles() == 1 && amp.browser.getViewName() == "Pack B",
+                    "choosing a pack shows only that pack");
+
+            p.loadNamModel (alpha);
+            waitForModel();
+            settleLoop (100);
+            report (amp.browser.getFolder() == libDir, "a model loaded from elsewhere takes the list to its folder");
+
+            packA.deleteRecursively();
+            packB.deleteRecursively();
+        }
 
         // built-in mode has no list
         setParam (p, "AMP_TYPE", 0.0f);
@@ -863,7 +925,7 @@ void renderUiSnapshots (const juce::File& dir)
         settleLoop (200);
         report (p.loadedIrFile == irB, "the previous arrow goes back");
 
-        cab.irSlot.browseButton.triggerClick();
+        cab.browser.hideButton.triggerClick();
         settleLoop (100);
         report (! cab.browser.isVisible(), "Browse hides the IR list");
         save (*editor, dir.getChildFile ("ui_cab_browser_closed.png"));

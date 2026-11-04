@@ -165,6 +165,65 @@ namespace Icons
     }
 
     //==========================================================================
+    // Small actions (the model list, the model strip)
+
+    /** A magnifier: search. */
+    inline Glyph search()
+    {
+        Glyph g;
+        detail::circle (g.line, 0.43f, 0.43f, 0.25f);
+        detail::poly (g.line, { { 0.62f, 0.62f }, { 0.86f, 0.86f } });
+        return g;
+    }
+
+    /** A plus: add. */
+    inline Glyph plus()
+    {
+        Glyph g;
+        detail::poly (g.line, { { 0.5f, 0.18f }, { 0.5f, 0.82f } });
+        detail::poly (g.line, { { 0.18f, 0.5f }, { 0.82f, 0.5f } });
+        return g;
+    }
+
+    /** A folder with a tab: show the folder in the file manager. */
+    inline Glyph folder()
+    {
+        Glyph g;
+        detail::poly (g.line, { { 0.1f, 0.78f }, { 0.1f, 0.24f }, { 0.38f, 0.24f }, { 0.47f, 0.34f },
+                                { 0.9f, 0.34f }, { 0.9f, 0.78f } });
+        g.line.closeSubPath();
+        return g;
+    }
+
+    /** A panel with its right part and a chevron pointing out of it: hide the side list. */
+    inline Glyph hidePanel()
+    {
+        Glyph g;
+        g.line.addRoundedRectangle (0.1f, 0.18f, 0.8f, 0.64f, 0.1f);
+        detail::poly (g.line, { { 0.62f, 0.18f }, { 0.62f, 0.82f } });
+        detail::poly (g.line, { { 0.33f, 0.38f }, { 0.43f, 0.5f }, { 0.33f, 0.62f } });
+        return g;
+    }
+
+    /** Three dots: more actions. */
+    inline Glyph more()
+    {
+        Glyph g;
+        for (float x : { 0.22f, 0.5f, 0.78f })
+            detail::circle (g.dots, x, 0.5f, 0.07f);
+        return g;
+    }
+
+    /** An x: close. */
+    inline Glyph close()
+    {
+        Glyph g;
+        detail::poly (g.line, { { 0.27f, 0.27f }, { 0.73f, 0.73f } });
+        detail::poly (g.line, { { 0.73f, 0.27f }, { 0.27f, 0.73f } });
+        return g;
+    }
+
+    //==========================================================================
     /** Draws `glyph` into `area` (a square is best) in `colour`. */
     inline void draw (juce::Graphics& g, const Glyph& glyph, juce::Rectangle<float> area, juce::Colour colour, float strokeWidth = 1.6f)
     {
