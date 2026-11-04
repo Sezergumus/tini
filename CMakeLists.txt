@@ -174,6 +174,25 @@ juce_generate_juce_header(Tini)
 
 target_compile_definitions(Tini PUBLIC JUCE_VST3_CAN_REPLACE_VST2=0)
 
+# Windows version resource with the real name "tını" (Task Manager, pinned taskbar button), in place
+# of JUCE's, which can only use the ASCII PRODUCT_NAME. See Assets/Windows/version.rc.in.
+if(WIN32)
+    get_target_property(TINI_RC_VERSION Tini JUCE_VERSION)
+    get_target_property(TINI_RC_COMPANY Tini JUCE_COMPANY_NAME)
+    string(REPLACE "." "," TINI_RC_VERSION_COMMAS "${TINI_RC_VERSION}")
+    string(REGEX MATCHALL "," _tini_commas "${TINI_RC_VERSION_COMMAS}")
+    list(LENGTH _tini_commas _tini_comma_count)
+    math(EXPR _tini_missing "3 - ${_tini_comma_count}")   # FILEVERSION wants four numbers
+    if(_tini_missing GREATER 0)
+        foreach(_i RANGE 1 ${_tini_missing})
+            string(APPEND TINI_RC_VERSION_COMMAS ",0")
+        endforeach()
+    endif()
+    set(TINI_VERSION_RC "${CMAKE_CURRENT_BINARY_DIR}/TiniVersion.rc")
+    configure_file(Assets/Windows/version.rc.in "${TINI_VERSION_RC}" @ONLY)
+    target_compile_definitions(Tini PRIVATE JUCE_USER_DEFINED_RC_FILE="${TINI_VERSION_RC}")
+endif()
+
 # Headless DSP tests (run: build/TiniTests_artefacts/Release/TiniTests.exe)
 juce_add_console_app(TiniTests PRODUCT_NAME "Tini Tests")
 

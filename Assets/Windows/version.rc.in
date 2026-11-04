@@ -1,0 +1,32 @@
+// The Windows version resource of Tini.exe and Tini.vst3, used in place of the one JUCE writes
+// (see JUCE_USER_DEFINED_RC_FILE in CMakeLists.txt). JUCE takes FileDescription and ProductName
+// from PRODUCT_NAME, which has to stay ASCII; this file gives them the real name. Windows shows
+// FileDescription in Task Manager and as the name of a pinned taskbar button.
+// JUCE's generated .rc includes this file (it already sets code_page 65001, so the text is UTF-8)
+// and adds the icons itself after it.
+
+#undef  WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION    @TINI_RC_VERSION_COMMAS@
+PRODUCTVERSION @TINI_RC_VERSION_COMMAS@
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName",      "@TINI_RC_COMPANY@\0"
+      VALUE "FileDescription",  "tını\0"
+      VALUE "FileVersion",      "@TINI_RC_VERSION@\0"
+      VALUE "ProductName",      "tını\0"
+      VALUE "ProductVersion",   "@TINI_RC_VERSION@\0"
+    END
+  END
+
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
