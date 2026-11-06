@@ -81,7 +81,7 @@ tını is the opposite: **bring any `.nam` capture** (there are thousands of fre
    **Plugin:** copy `Tini.vst3` to `C:\Program Files\Common Files\VST3` and rescan plugins in your DAW.
 3. tını ships without amp models. Download `.nam` captures and IRs (for example from
    [TONE3000](https://www.tone3000.com)) and drop them on the window: they are filed into the Library
-   (`Documents	ini`).
+   (`Documents\tini`).
 
 > [!NOTE]
 > The download is not code-signed, so Windows SmartScreen may warn. Choose *More info*, then *Run anyway*.
