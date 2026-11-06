@@ -15,7 +15,7 @@ Load captures of real amps, add a pedal board you can rearrange, run it standalo
 
 <br />
 
-<img src="Assets/Screenshots/tour.gif" alt="A tour of tını: the pedal chain, a pedal page, the pedal picker, the Library, the tuner and the preset list" width="860" />
+<img src="Assets/Screenshots/tour.webp" alt="A tour of tını: the pedal chain, a pedal page, the pedal picker, the Library, the tuner and the preset list" width="900" />
 
 </div>
 
